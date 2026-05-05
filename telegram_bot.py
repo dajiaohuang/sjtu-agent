@@ -149,6 +149,65 @@ def _capture_turn(sess: dict, user_text: str) -> str:
     return clean[idx + len(marker):].strip()
 
 
+# ── Markdown → Telegram HTML 转换 ────────────────────────────────────────────
+
+def _md_to_tg_html(text: str) -> str:
+    """
+    将 agent 输出的 Markdown 文本转换为 Telegram 支持的 HTML 格式。
+    Telegram HTML 只支持：<b> <i> <u> <s> <code> <pre> <a>
+    """
+    import html as _html
+    import re as _re
+
+    # 1. 先转义 HTML 特殊字符（避免内容中的 < > & 被解析为标签）
+    #    但要跳过已有的 HTML 标签（如日报里的 <b>）
+    #    检测是否已经是 HTML：包含明确的 <b> <i> 等标签
+    if _re.search(r'<(b|i|u|code|pre|a)\b[^>]*>', text):
+        # 已经是 HTML 格式，直接返回
+        return text
+
+    # 转义纯文本中的 HTML 字符
+    def _escape_non_tag(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    lines = text.split("\n")
+    result = []
+
+    for line in lines:
+        # 水平分隔线
+        if _re.match(r"^\s*[-*_]{3,}\s*$", line):
+            result.append("")
+            continue
+
+        # ### 标题 → <b>
+        m = _re.match(r"^#{1,6}\s+(.*)", line)
+        if m:
+            content = _escape_non_tag(m.group(1).strip())
+            # 移除标题内的 ** 标记
+            content = _re.sub(r"\*\*(.*?)\*\*", r"\1", content)
+            result.append(f"<b>{content}</b>")
+            continue
+
+        # 普通行：转义后处理内联样式
+        line = _escape_non_tag(line)
+
+        # **bold** → <b>bold</b>
+        line = _re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", line)
+
+        # *italic* 或 _italic_ → <i>italic</i>（避免误伤正常下划线）
+        line = _re.sub(r"\*([^*\n]+?)\*", r"<i>\1</i>", line)
+
+        # `code` → <code>code</code>
+        line = _re.sub(r"`([^`\n]+?)`", r"<code>\1</code>", line)
+
+        # [text](url) → <a href="url">text</a>
+        line = _re.sub(r"\[([^\]]+?)\]\((https?://[^\)]+?)\)", r'<a href="\2">\1</a>', line)
+
+        result.append(line)
+
+    return "\n".join(result)
+
+
 # ── 消息发送工具 ──────────────────────────────────────────────────────────────
 
 def _send_chunks(chat_id: int, text: str, max_len: int = 4000, parse_mode: str = "") -> None:
@@ -292,7 +351,8 @@ def handle_text(msg):
         try:
             with lock:
                 reply = _capture_turn(sess, msg.text.strip())
-            _send_chunks(chat_id, reply)
+            html_reply = _md_to_tg_html(reply)
+            _send_chunks(chat_id, html_reply, parse_mode="HTML")
         except Exception as e:
             bot.send_message(chat_id, f"❌ 出错了：{e}")
         finally:
