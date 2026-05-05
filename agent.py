@@ -3766,13 +3766,17 @@ def _run_one_turn_anthropic(client: Anthropic, model: str, messages: list) -> No
                             error_payload = ev.get("error", ev)
                             break
 
-        except (_httpx.ReadTimeout, _httpx.ConnectTimeout, _httpx.TimeoutException) as e:
+        except (
+            _httpx.ReadTimeout, _httpx.ConnectTimeout,
+            _httpx.TimeoutException, _httpx.ConnectError,
+            _httpx.RemoteProtocolError, _httpx.NetworkError,
+        ) as e:
             spinner.stop()
             if in_thinking or in_text:
                 sys.stdout.write("\033[0m\n")
                 sys.stdout.flush()
             import time as _time
-            print(f"\r[提示] 网络超时，5 秒后重试…（{e}）")
+            print(f"\r[提示] 网络连接失败，5 秒后重试…（{type(e).__name__}: {e}）")
             _time.sleep(5)
             continue
         except Exception as e:
@@ -3780,7 +3784,9 @@ def _run_one_turn_anthropic(client: Anthropic, model: str, messages: list) -> No
             if in_thinking or in_text:
                 sys.stdout.write("\033[0m\n")
                 sys.stdout.flush()
-            raise
+            # 对于非预期异常，打印错误但不退出聊天循环
+            print(f"\r[错误] 请求失败：{type(e).__name__}: {e}")
+            return  # 返回到 chat_loop，让用户重新输入
         finally:
             spinner.stop()
 
@@ -3976,7 +3982,18 @@ def chat_loop(client, model: str):
             continue
 
         messages.append({"role": "user", "content": user_input})
-        _run_one_turn(client_box[0], model_box[0], messages)
+        try:
+            _run_one_turn(client_box[0], model_box[0], messages)
+        except KeyboardInterrupt:
+            print("\n[已中断当前请求，可继续输入]")
+            # 移除未完成的 user 消息，保持历史干净
+            if messages and messages[-1].get("role") == "user":
+                messages.pop()
+        except Exception as e:
+            print(f"\r[错误] 本轮请求失败（{type(e).__name__}: {e}），请重新输入。")
+            # 移除未完成的 user 消息
+            if messages and messages[-1].get("role") == "user":
+                messages.pop()
 
 
 def main():
