@@ -1756,6 +1756,74 @@ def _prefetch_ddls_background() -> None:
         pass  # 预热失败不影响主进程
 
 
+def _check_for_updates() -> None:
+    """
+    在后台线程中检查 git 远程是否有新提交。
+    若检测到更新，启动完成后打印一行提示，引导用户运行 sjtu-agent update。
+    非 git 仓库 / 无网络时静默失败，不影响任何功能。
+    """
+    import shutil as _shutil
+    import subprocess as _sub
+
+    git = _shutil.which("git")
+    if not git:
+        return
+
+    project_root = str(Path(__file__).resolve().parent)
+    try:
+        # 检查是否在 git 仓库内
+        r = _sub.run(
+            [git, "rev-parse", "--is-inside-work-tree"],
+            cwd=project_root, capture_output=True, timeout=5,
+        )
+        if r.returncode != 0:
+            return
+
+        # 静默 fetch（只更新远端引用，不改变本地分支）
+        _sub.run(
+            [git, "fetch", "--quiet", "--no-tags", "origin"],
+            cwd=project_root, capture_output=True, timeout=15,
+        )
+
+        # 比较本地 HEAD 与 origin/HEAD（或 origin/main）
+        local_hash = _sub.run(
+            [git, "rev-parse", "HEAD"],
+            cwd=project_root, capture_output=True, timeout=5,
+        ).stdout.decode().strip()
+
+        # 尝试 @{u}（跟踪分支），失败则 origin/main
+        r2 = _sub.run(
+            [git, "rev-parse", "@{u}"],
+            cwd=project_root, capture_output=True, timeout=5,
+        )
+        if r2.returncode == 0:
+            remote_hash = r2.stdout.decode().strip()
+        else:
+            r3 = _sub.run(
+                [git, "rev-parse", "origin/main"],
+                cwd=project_root, capture_output=True, timeout=5,
+            )
+            if r3.returncode != 0:
+                return
+            remote_hash = r3.stdout.decode().strip()
+
+        if local_hash and remote_hash and local_hash != remote_hash:
+            # 统计落后几个提交
+            r4 = _sub.run(
+                [git, "rev-list", "--count", f"{local_hash}..{remote_hash}"],
+                cwd=project_root, capture_output=True, timeout=5,
+            )
+            behind = r4.stdout.decode().strip() if r4.returncode == 0 else "?"
+            # 存入模块级变量，启动完成后打印
+            _UPDATE_AVAILABLE["behind"] = behind
+    except Exception:
+        pass  # 网络不通或其他异常，静默忽略
+
+
+# 用于在主线程启动完成后读取后台更新检查结果
+_UPDATE_AVAILABLE: dict = {}
+
+
 def tool_get_ddls(skip_canvas=False, skip_aihaoke=False, skip_icourse=False):
     import datetime as _dt
     cfg = dc.load_config()
@@ -3164,8 +3232,16 @@ def chat_loop(client, model: str):
     model_box  = [model]   # 用列表包裹使内部可修改
     client_box = [client]  # 同理，切换模型时可替换 client
 
-    # ── 启动时后台预热 DDL 缓存（不阻塞主线程）────────────────────────────────
+    # ── 启动时后台预热 DDL 缓存 + 检查更新（不阻塞主线程）──────────────────────
     _prefetch_ddls_background()
+    _update_thread = threading.Thread(target=_check_for_updates, daemon=True)
+    _update_thread.start()
+
+    # ── 等待更新检查线程（最多 10 秒），完成后打印提示 ─────────────────────
+    _update_thread.join(timeout=10)
+    if _UPDATE_AVAILABLE.get("behind"):
+        behind = _UPDATE_AVAILABLE["behind"]
+        print(f"💡 有 {behind} 个新提交可用，运行 sjtu-agent update 即可一键更新。\n")
 
     # ── 启动检查：直接调本地函数，无需 LLM roundtrip ─────────────────────────
     print("正在检查配置状态…", flush=True)
