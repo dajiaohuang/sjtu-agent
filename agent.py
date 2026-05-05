@@ -2860,18 +2860,40 @@ def _stream_with_think_tags(stream, spinner: "Spinner") -> tuple[str, str, dict]
       1. delta.reasoning_content 字段（DeepSeek-R1 原生）
       2. <think>...</think> XML 标签混在 content 中（minimax / 部分模型）
 
-    思考过程只通过 Spinner 文字提示，不实时打印到终端（避免 ANSI 光标计算错误导致闪烁）。
+    思考内容实时以暗体灰字流式输出（先停 Spinner，避免并发写屏乱码）。
     正文内容全部缓冲，流结束后由调用方统一用 print_markdown_message 渲染。
+
+    关键：在开始写思考文字前先停 Spinner，思考结束后重启 Spinner 等待正文。
+    这样消除了 Spinner 的 \\r 和 write() 并发竞争导致的闪烁。
 
     返回：(full_content_no_think, full_reasoning, tool_calls_map)
     """
     full_content   = ""   # 包含 <think> 的原始正文（用于存入 messages）
-    full_reasoning = ""   # 思考内容（不打印，只收集）
+    full_reasoning = ""   # 思考内容（展示并收集）
     tool_calls_map: dict[int, dict] = {}
 
     TAG_OPEN  = "<think>"
     TAG_CLOSE = "</think>"
     in_think = False   # 当前是否在 <think> 块内
+    thinking_started = False  # 是否已打印过思考前缀
+
+    def _start_thinking():
+        nonlocal thinking_started
+        if thinking_started:
+            return
+        spinner.stop()  # ← 关键：先停 Spinner，再输出文字，避免 \r 覆盖
+        sys.stdout.write("\033[2m💭 ")  # 暗体灰字前缀
+        sys.stdout.flush()
+        thinking_started = True
+
+    def _end_thinking():
+        nonlocal thinking_started, in_think
+        if thinking_started:
+            sys.stdout.write("\033[0m\n")  # 重置颜色，换行
+            sys.stdout.flush()
+            thinking_started = False
+        in_think = False
+        spinner.start("生成回复…")  # ← 思考结束后重启 Spinner 等待正文
 
     for chunk in stream:
         delta = chunk.choices[0].delta if chunk.choices else None
@@ -2881,8 +2903,9 @@ def _stream_with_think_tags(stream, spinner: "Spinner") -> tuple[str, str, dict]
         # ── reasoning_content 字段（DeepSeek-R1 / Qwen 原生）────────────
         rc = getattr(delta, "reasoning_content", None) or ""
         if rc:
-            if not full_reasoning:
-                spinner.update("思考中…")
+            _start_thinking()
+            sys.stdout.write(rc)
+            sys.stdout.flush()
             full_reasoning += rc
 
         # ── content 字段 ────────────────────────────────────────────────
@@ -2890,17 +2913,35 @@ def _stream_with_think_tags(stream, spinner: "Spinner") -> tuple[str, str, dict]
         if text_chunk:
             full_content += text_chunk
 
-            # 检测 <think> / </think>，更新 spinner 文字
-            if TAG_OPEN in text_chunk:
+            # 处理 <think> 标签
+            if TAG_OPEN in text_chunk and not in_think:
                 in_think = True
-                spinner.update("思考中…")
-            if TAG_CLOSE in text_chunk and in_think:
-                in_think = False
-                spinner.update("生成回复…")
-
-            # 如果已有思考内容、现在出现了真正正文，更新 spinner
-            if full_reasoning and not in_think and text_chunk.strip():
-                spinner.update("生成回复…")
+                # 取 <think> 之后的内容
+                after = text_chunk[text_chunk.index(TAG_OPEN) + len(TAG_OPEN):]
+                if after:
+                    _start_thinking()
+                    sys.stdout.write(after)
+                    sys.stdout.flush()
+                    full_reasoning += after
+            elif TAG_CLOSE in text_chunk and in_think:
+                # 取 </think> 之前的内容
+                before = text_chunk[:text_chunk.index(TAG_CLOSE)]
+                if before:
+                    _start_thinking()
+                    sys.stdout.write(before)
+                    sys.stdout.flush()
+                    full_reasoning += before
+                _end_thinking()
+            elif in_think:
+                # 在思考块内部
+                _start_thinking()
+                sys.stdout.write(text_chunk)
+                sys.stdout.flush()
+                full_reasoning += text_chunk
+            else:
+                # 普通正文：若之前有 reasoning_content 思考，先结束思考显示
+                if thinking_started:
+                    _end_thinking()
 
         # ── 工具调用 ─────────────────────────────────────────────────────
         if delta.tool_calls:
@@ -2916,6 +2957,11 @@ def _stream_with_think_tags(stream, spinner: "Spinner") -> tuple[str, str, dict]
                         entry["name"] += tc_delta.function.name
                     if tc_delta.function.arguments:
                         entry["arguments"] += tc_delta.function.arguments
+
+    # 流结束时若还在思考状态，收尾
+    if thinking_started:
+        sys.stdout.write("\033[0m\n")
+        sys.stdout.flush()
 
     # 从 full_content 中剥离 <think>...</think> 块，得到纯正文
     clean_content = re.sub(r"<think>.*?</think>", "", full_content, flags=re.DOTALL).strip()
