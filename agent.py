@@ -1012,7 +1012,8 @@ def _auto_create_canvas_token(base_url: str, token_purpose: str = "SJTU Agent") 
     try:
         print("[Canvas] 正在启动浏览器并尝试自动创建 token…", flush=True)
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=not sys.stdin.isatty())
+            # 始终使用无头模式：有界面模式在 Windows 终端/CI 环境中容易卡死
+            browser = playwright.chromium.launch(headless=True)
             context = browser.new_context()
             page = context.new_page()
 
@@ -1030,7 +1031,13 @@ def _auto_create_canvas_token(base_url: str, token_purpose: str = "SJTU Agent") 
                     return {"success": False, "error": "jAccount 登录失败，无法自动创建 Canvas token"}
 
             print("[Canvas] 已进入 Canvas，正在定位 token 设置…", flush=True)
-            page.goto(settings_url, wait_until="networkidle", timeout=30_000)
+            # 用 load 代替 networkidle，避免在复杂页面无限等待
+            try:
+                page.goto(settings_url, wait_until="load", timeout=30_000)
+            except Exception:
+                page.goto(settings_url, wait_until="domcontentloaded", timeout=30_000)
+            # 额外等待 JS 渲染完成
+            page.wait_for_timeout(2000)
 
             if not _canvas_click_first(
                 page,
@@ -1053,6 +1060,8 @@ def _auto_create_canvas_token(base_url: str, token_purpose: str = "SJTU Agent") 
                 return {"success": False, "error": "没有在 Canvas 设置页找到创建访问令牌的入口"}
 
             print("[Canvas] 已打开新建 token 对话框，正在填写用途…", flush=True)
+            # 等待对话框出现
+            page.wait_for_timeout(800)
             _canvas_fill_first(
                 page,
                 [
@@ -1061,6 +1070,8 @@ def _auto_create_canvas_token(base_url: str, token_purpose: str = "SJTU Agent") 
                     "input[placeholder*='Purpose']",
                     "input[placeholder*='用途']",
                     ".ui-dialog input[type='text']",
+                    ".ReactModal__Content input[type='text']",
+                    "dialog input[type='text']",
                 ],
                 token_purpose,
             )
@@ -1069,20 +1080,39 @@ def _auto_create_canvas_token(base_url: str, token_purpose: str = "SJTU Agent") 
                 page,
                 [
                     "button:has-text('Generate Token')",
-                    "button:has-text('生成')",
                     "button:has-text('生成令牌')",
+                    "button:has-text('生成')",
                     "button:has-text('Submit')",
                     "button:has-text('确定')",
                     "a:has-text('生成令牌')",
+                    ".ReactModal__Content button.btn-primary",
                     ".ui-dialog button.btn-primary",
                     ".ui-dialog button[type='submit']",
+                    ".ReactModal__Content button[type='submit']",
                 ],
             ):
                 browser.close()
                 return {"success": False, "error": "没有找到生成 token 的确认按钮"}
 
-            print("[Canvas] 正在读取刚生成的 token…", flush=True)
-            page.wait_for_timeout(1500)
+            print("[Canvas] 正在等待 token 出现…", flush=True)
+            # 等待 token 显示区域出现（最多 8 秒）
+            _token_appeared = False
+            for _sel in [
+                "input[value]",
+                ".ic-Form-control",
+                ".ui-dialog-content",
+                ".ReactModal__Content",
+                "code",
+                "pre",
+            ]:
+                try:
+                    page.wait_for_selector(_sel, timeout=8_000)
+                    _token_appeared = True
+                    break
+                except Exception:
+                    continue
+            if not _token_appeared:
+                page.wait_for_timeout(3000)
             token = _extract_canvas_token(page)
             browser.close()
     except Exception as exc:
