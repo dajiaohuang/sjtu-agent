@@ -577,6 +577,48 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "execute_python",
+            "description": (
+                "在当前项目环境中动态执行 Python 代码片段，用于完成没有现成工具的任务。"
+                "当你想做某件事但没有对应工具时（例如：标记邮件已读、批量操作、数据处理、"
+                "调用任意 API、读写文件等），先尝试写代码解决，实在做不到再报错。"
+                "代码可以 import 任何已安装的包（imaplib/smtplib/requests/json/os 等）。"
+                "代码中 print() 的输出会作为结果返回。"
+                "注意：代码运行在受信任的本地环境，可以直接访问 os.environ、CONFIG_PATH 等。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": (
+                            "要执行的 Python 代码。"
+                            "可通过 import agent, ddl_checker as dc 引入项目模块。"
+                            "结果用 print() 输出，或直接 raise 异常报错。\n"
+                            "示例：将所有未读邮件设为已读：\n"
+                            "  import imaplib, ssl, os\n"
+                            "  ctx = ssl.create_default_context()\n"
+                            "  m = imaplib.IMAP4_SSL('mail.sjtu.edu.cn', 993, ctx)\n"
+                            "  user = os.environ['JACCOUNT_USERNAME'] + '@sjtu.edu.cn'\n"
+                            "  m.login(user, os.environ['JACCOUNT_PASSWORD'])\n"
+                            "  m.select('INBOX')\n"
+                            "  m.uid('STORE', '1:*', '+FLAGS', '\\\\Seen')\n"
+                            "  print('OK')\n"
+                            "  m.logout()"
+                        ),
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "超时秒数，默认 60",
+                    },
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_emails",
             "description": (
                 "通过 IMAP 读取交大邮箱（mail.sjtu.edu.cn）邮件列表。"
@@ -2764,6 +2806,55 @@ def tool_send_email(
         return {"error": f"发送失败：{e}"}
 
 
+def tool_execute_python(code: str, timeout: int = 60) -> dict:
+    """
+    在当前进程中安全地执行动态 Python 代码片段。
+    stdout/stderr 捕获后作为结果返回，不会污染终端。
+    """
+    import subprocess as _sp
+    import sys as _sys
+
+    # 注入基础 import 路径
+    preamble = (
+        "import sys, os\n"
+        f"sys.path.insert(0, {str(ROOT)!r})\n"
+        "from pathlib import Path\n"
+        "from dotenv import load_dotenv\n"
+        f"load_dotenv({str(ENV_PATH)!r})\n"
+        "import ddl_checker as dc\n"
+    )
+    full_code = preamble + "\n" + code
+
+    try:
+        result = _sp.run(
+            [_sys.executable, "-c", full_code],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(ROOT),
+        )
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        if result.returncode != 0:
+            return {
+                "ok": False,
+                "returncode": result.returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "error": stderr or f"进程退出码 {result.returncode}",
+            }
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+    except _sp.TimeoutExpired:
+        return {"ok": False, "error": f"代码执行超时（{timeout}秒）"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def tool_list_assignment_files(
     course_filter: str = "",
     assignments_dir: str = "./assignments",
@@ -3100,6 +3191,7 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "read_emails":              r = tool_read_emails(**args)
         elif name == "search_emails":            r = tool_search_emails(**args)
         elif name == "send_email":               r = tool_send_email(**args)
+        elif name == "execute_python":           r = tool_execute_python(**args)
         else:                               r = {"error": f"未知工具: {name}"}
     except Exception as e:
         r = {"error": str(e)}
@@ -3324,6 +3416,7 @@ _TOOL_LABELS = {
     "read_emails":            "正在读取交大邮箱…",
     "search_emails":          "正在搜索邮件…",
     "send_email":             "正在发送邮件…",
+    "execute_python":         "正在执行代码…",
 }
 
 
