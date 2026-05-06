@@ -1708,10 +1708,14 @@ def tool_setup_shuiyuan() -> dict:
                 browser.close()
                 return {"error": "需要 jAccount 凭据，请先用 save_credentials 配置"}
             try:
-                page.fill("input[name='user']", username)
-                page.fill("input[name='pass']", password)
-                page.click("input[type='submit']")
-                page.wait_for_url("**/shuiyuan.sjtu.edu.cn/**", timeout=20_000)
+                # 使用支持短信验证码的 _fill_jaccount
+                if not login_module._fill_jaccount(page, username, password):
+                    browser.close()
+                    return _shuiyuan_error("jAccount 登录失败，请检查账号密码")
+                try:
+                    page.wait_for_url("**/shuiyuan.sjtu.edu.cn/**", timeout=15_000)
+                except Exception:
+                    pass
                 new_ja = {c["name"]: c["value"] for c in ctx.cookies()
                           if "jaccount" in c.get("domain", "")}
                 if new_ja:
@@ -1720,8 +1724,7 @@ def tool_setup_shuiyuan() -> dict:
                 browser.close()
                 return _shuiyuan_error(
                     f"jAccount 登录失败：{e}",
-                    "这通常是因为 jAccount 触发了短信验证码或额外安全验证。"
-                    "水源没有固定的 API 设置页；你可以稍后重新说“配置水源”重试，"
+                    "水源没有固定的 API 设置页；你可以稍后重新说「配置水源」重试，"
                     "或者等自动流程回退到 session cookie 方案。",
                 )
 

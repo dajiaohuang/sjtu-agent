@@ -242,6 +242,22 @@ def _fetch_aihaoke_enrolled_courses(headers: dict) -> list[dict] | None:
         if rows:
             courses = []
             for c in rows:
+                # 只保留学生确实已选修/加入的课程
+                # joinStatus=1 / selectStatus=1 / studentStatus=1 表示已加入
+                # 若字段不存在（老版本接口），默认保留（不过滤）
+                join_status   = c.get("joinStatus")
+                select_status = c.get("selectStatus")
+                student_status = c.get("studentStatus")
+                enroll_status = c.get("enrollStatus")
+                # 任一已知状态字段明确为"未加入/已退出"时跳过
+                if join_status is not None and join_status not in (1, "1", True, "true", "joined"):
+                    continue
+                if select_status is not None and select_status not in (1, "1", True, "true"):
+                    continue
+                if student_status is not None and student_status not in (1, "1", True, "true", "active"):
+                    continue
+                if enroll_status is not None and enroll_status not in (1, "1", True, "true", "enrolled"):
+                    continue
                 cid = c.get("courseId") or c.get("classId") or c.get("id")
                 iid = c.get("instanceId") or c.get("id")
                 name = c.get("courseName") or c.get("className") or c.get("name") or f"课程{cid}"
