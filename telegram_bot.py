@@ -18,10 +18,13 @@ telegram_bot.py — 将 agent.py 接入 Telegram Bot
   /reminders    — 查看提醒事项列表
 """
 
+import base64
+import importlib
 import io
 import json
 import re
 import sys
+import tempfile
 import threading
 import datetime as _dt
 from pathlib import Path
@@ -322,6 +325,212 @@ def cmd_reminders(msg):
     bot.reply_to(msg, "\n".join(lines), parse_mode="HTML")
 
 
+# ── 文件 / 图片处理辅助 ───────────────────────────────────────────────────────
+
+# 临时文件目录（每次启动复用，进程退出后由 OS 自动清理）
+_TMP_DIR = Path(tempfile.mkdtemp(prefix="sjtu_tg_"))
+
+
+def _download_tg_file(file_id: str, filename: str) -> Path:
+    """从 Telegram 服务器下载文件，保存到临时目录，返回本地路径。"""
+    file_info = bot.get_file(file_id)
+    file_bytes = bot.download_file(file_info.file_path)
+    save_path = _TMP_DIR / filename
+    save_path.write_bytes(file_bytes)
+    return save_path
+
+
+def _model_supports_vision(model: str) -> bool:
+    """简单判断当前模型是否支持图片输入。"""
+    m = model.lower()
+    return any(kw in m for kw in [
+        "vision", "gpt-4o", "gpt-4-turbo", "claude-3", "claude-4",
+        "gemini", "qwen-vl", "qwen3vl", "glm-4v", "internvl",
+    ])
+
+
+def _capture_turn_multimodal(sess: dict, content: list) -> str:
+    """
+    与 _capture_turn 类似，但 user 消息使用多模态 content list。
+    content 格式：OpenAI 多模态消息 content 数组，如
+      [{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "data:..."}}]
+    """
+    _init_messages(sess)
+    if sess["messages"] and sess["messages"][0]["role"] == "system":
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx()
+    sess["messages"].append({"role": "user", "content": content})
+
+    buf = io.StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = buf
+    try:
+        agent._run_one_turn(
+            sess["client_box"][0],
+            sess["model_box"][0],
+            sess["messages"],
+        )
+    finally:
+        sys.stdout = old_stdout
+
+    raw   = buf.getvalue()
+    clean = _ANSI_RE.sub("", raw)
+    marker = "Agent: "
+    idx = clean.rfind(marker)
+    if idx == -1:
+        for m in reversed(sess["messages"]):
+            if m.get("role") == "assistant":
+                c = m.get("content", "")
+                if isinstance(c, str):
+                    return c.strip() or "(已完成)"
+                elif isinstance(c, list):
+                    return "\n".join(b.get("text", "") for b in c if b.get("type") == "text").strip() or "(已完成)"
+        return "(已完成)"
+    return clean[idx + len(marker):].strip()
+
+
+def _run_with_typing(chat_id: int, lock, fn):
+    """在 typing 动作下运行 fn()，统一处理异常并发送结果。"""
+    sess = _get_session(chat_id)
+    if lock.locked():
+        bot.send_message(chat_id, "⏳ 上一条消息还在处理中，请稍候…")
+        return
+
+    stop_typing = threading.Event()
+    threading.Thread(target=_keep_typing, args=(chat_id, stop_typing), daemon=True).start()
+    try:
+        with lock:
+            reply = fn(sess)
+        html_reply = _md_to_tg_html(reply)
+        _send_chunks(chat_id, html_reply, parse_mode="HTML")
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ 出错了：{e}")
+    finally:
+        stop_typing.set()
+
+
+# ── 文档消息处理（PDF / 任意文件）────────────────────────────────────────────
+
+@bot.message_handler(content_types=["document"])
+def handle_document(msg):
+    chat_id = msg.chat.id
+    if not _is_authorized(chat_id, msg):
+        return
+
+    doc      = msg.document
+    caption  = (msg.caption or "").strip()
+    filename = doc.file_name or f"file_{doc.file_id[:8]}"
+
+    lock = _locks.get(chat_id) or _get_session(chat_id) and _locks[chat_id]
+    if lock.locked():
+        bot.reply_to(msg, "⏳ 上一条消息还在处理中，请稍候…")
+        return
+
+    bot.send_chat_action(chat_id, "upload_document")
+
+    def run():
+        sess = _get_session(chat_id)
+        stop_typing = threading.Event()
+        threading.Thread(target=_keep_typing, args=(chat_id, stop_typing), daemon=True).start()
+        try:
+            # 1. 下载文件到临时目录
+            local_path = _download_tg_file(doc.file_id, filename)
+
+            # 2. 构造传给 agent 的用户消息：告知文件已保存到本地路径
+            suffix = local_path.suffix.lower()
+            extra_context = ""
+            if suffix == ".pdf":
+                # 尝试提取前 4000 字符供 agent 直接阅读
+                try:
+                    result = agent.tool_read_assignment_file(str(local_path), max_chars=4000)
+                    extracted = result.get("content", "")
+                    if extracted:
+                        extra_context = (
+                            f"\n\n以下是 PDF 前几页提取的文字内容供参考：\n"
+                            f"```\n{extracted[:3000]}\n```"
+                        )
+                except Exception:
+                    pass
+
+            user_text = (
+                f"[用户通过 Telegram 发送了文件：{filename}]\n"
+                f"文件已保存到本地路径：{local_path}\n"
+                f"文件大小：{local_path.stat().st_size // 1024} KB"
+                + extra_context
+                + (f"\n\n用户说：{caption}" if caption else "\n\n（用户未附加说明，请询问需要对这个文件做什么）")
+            )
+
+            with lock:
+                reply = _capture_turn(sess, user_text)
+            _send_chunks(chat_id, _md_to_tg_html(reply), parse_mode="HTML")
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ 文件处理出错：{e}")
+        finally:
+            stop_typing.set()
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+# ── 图片消息处理 ──────────────────────────────────────────────────────────────
+
+@bot.message_handler(content_types=["photo"])
+def handle_photo(msg):
+    chat_id = msg.chat.id
+    if not _is_authorized(chat_id, msg):
+        return
+
+    caption = (msg.caption or "").strip()
+    # 取最高分辨率（photos[-1]）
+    photo   = msg.photo[-1]
+    lock = _locks.get(chat_id) or _get_session(chat_id) and _locks[chat_id]
+    if lock.locked():
+        bot.reply_to(msg, "⏳ 上一条消息还在处理中，请稍候…")
+        return
+
+    bot.send_chat_action(chat_id, "typing")
+
+    def run():
+        sess = _get_session(chat_id)
+        stop_typing = threading.Event()
+        threading.Thread(target=_keep_typing, args=(chat_id, stop_typing), daemon=True).start()
+        try:
+            local_path = _download_tg_file(photo.file_id, f"photo_{photo.file_id[:8]}.jpg")
+            model = sess["model_box"][0]
+
+            if _model_supports_vision(model):
+                # 读取图片并 base64 编码，构造 OpenAI 多模态消息
+                img_bytes = local_path.read_bytes()
+                b64 = base64.b64encode(img_bytes).decode()
+                content: list = []
+                if caption:
+                    content.append({"type": "text", "text": caption})
+                else:
+                    content.append({"type": "text", "text": "（用户发送了一张图片，请描述图片内容或询问用户需要做什么）"})
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                })
+                with lock:
+                    reply = _capture_turn_multimodal(sess, content)
+            else:
+                # 不支持视觉的模型：以文本说明代替
+                user_text = (
+                    f"[用户通过 Telegram 发送了一张图片]\n"
+                    f"图片已保存到本地：{local_path}\n"
+                    f"（当前模型 {model} 不支持图片输入，无法直接查看图片内容）"
+                    + (f"\n\n用户说：{caption}" if caption else "\n\n（用户未附加说明）")
+                )
+                with lock:
+                    reply = _capture_turn(sess, user_text)
+
+            _send_chunks(chat_id, _md_to_tg_html(reply), parse_mode="HTML")
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ 图片处理出错：{e}")
+        finally:
+            stop_typing.set()
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 # ── 普通消息处理 ──────────────────────────────────────────────────────────────
 
 @bot.message_handler(func=lambda m: True)
@@ -330,7 +539,7 @@ def handle_text(msg):
     if not _is_authorized(chat_id, msg):
         return
     if not msg.text:
-        bot.reply_to(msg, "暂不支持非文字消息，请直接发文字。")
+        bot.reply_to(msg, "暂不支持该类型消息，请发送文字、图片或文件（PDF）。")
         return
 
     sess = _get_session(chat_id)
