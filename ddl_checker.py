@@ -42,14 +42,6 @@ CST = timezone(timedelta(hours=8))
 NOW = datetime.now(CST)
 WEEKDAY_ZH = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
-# aihaoke 课程列表（可在此处增减）
-AIHAOKE_COURSES = [
-    {"name": "高等数学上", "courseId": 1962,  "instanceId": 1881},
-    {"name": "高等数学下", "courseId": 6095,  "instanceId": 10630},
-    {"name": "电路理论",   "courseId": 11760, "instanceId": 1037},
-    {"name": "电路实验",   "courseId": 23789, "instanceId": 1250},
-]
-
 # 中国大学MOOC课程列表（可在此处增减）
 ICOURSE_COURSES = [
     {
@@ -412,22 +404,13 @@ def refresh_aihaoke_cookies(cfg: dict) -> tuple[bool, str]:
         return False, "未配置 jAccount 凭据或 aihaoke_cookies"
 
     def _token_is_valid(token: str) -> bool:
+        """通过调用"我的课程"接口检测 token 是否有效，无需依赖硬编码课程 ID。"""
         if not token:
             return False
-        body = {
-            "classId": AIHAOKE_COURSES[0]["courseId"],
-            "orderType": 0,
-            "page": {"pageNo": 1, "pageSize": 1},
-            "searchText": "",
-            "status": 0,
-            "taskTypes": [],
-            "requireFlag": 1,
-            "requestId": str(_uuid.uuid4()),
-        }
         try:
             resp = requests.post(
-                "https://sjtu.aihaoke.net/api/learn/task/listTask",
-                json=body,
+                "https://sjtu.aihaoke.net/api/learn/course/listMyCourse",
+                json={"page": {"pageNo": 1, "pageSize": 1}, "requestId": str(_uuid.uuid4())},
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
