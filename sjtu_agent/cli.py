@@ -140,7 +140,19 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
 
 
 def _cmd_wechat_bot(args: argparse.Namespace) -> int:
-    return _run_module("wechat_bot", args.script_args)
+    # wechat_bot.py 位于项目根目录，用 run_path 直接执行脚本文件
+    root = Path(__file__).resolve().parent.parent
+    script = root / "wechat_bot.py"
+    old_argv = sys.argv[:]
+    sys.argv = [str(script), *(args.script_args or [])]
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+        return 0
+    except SystemExit as exc:
+        code = exc.code
+        return code if isinstance(code, int) else 0
+    finally:
+        sys.argv = old_argv
 
 
 def _parse_hhmm(value: str) -> tuple[int, int]:
