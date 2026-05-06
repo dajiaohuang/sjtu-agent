@@ -488,6 +488,9 @@ def main() -> None:
         print(f"token 已保存到 {CONFIG_PATH}")
         print("\n⚠️  请用微信给你的 Bot 发一条任意消息，系统才能获取 context_token（首次必须）。")
         print("之后就可以直接运行 python3 wechat_bot.py 了。\n")
+        # --login 模式只做扫码登录，保存完 token 后立即退出，不启动消息循环
+        # 消息循环需要用户在 agent 外单独运行 python3 wechat_bot.py
+        sys.exit(0)
 
     client = ILinkClient(token)
 
