@@ -12,7 +12,7 @@ care_check.py — 定时主动关怀脚本
 import json
 import sys
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
@@ -22,11 +22,16 @@ from sjtu_agent.paths import (
     USER_PROFILE_PATH,
     CARE_STATE_PATH,
     ENV_PATH,
+    atomic_write_json,
+    read_json_safe,
 )
 from dotenv import load_dotenv
 load_dotenv(ENV_PATH)
 
 import ddl_checker as dc
+
+# CST 时区，避免 datetime.now() 受系统时区/DST 影响导致冷却期错乱
+CST = timezone(timedelta(hours=8))
 
 # ── 关怀冷却期（同一类型的关怀最少间隔多少小时）────────────────────────────
 _CARE_COOLDOWN: dict[str, int] = {
@@ -42,29 +47,20 @@ _CARE_COOLDOWN: dict[str, int] = {
 
 
 def _load_profile() -> dict:
-    if not USER_PROFILE_PATH.exists():
-        return {}
-    try:
-        return json.loads(USER_PROFILE_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return read_json_safe(USER_PROFILE_PATH, default={})
 
 
 def _load_care_state() -> dict:
-    if not CARE_STATE_PATH.exists():
-        return {}
-    try:
-        return json.loads(CARE_STATE_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return read_json_safe(CARE_STATE_PATH, default={})
 
 
 def _save_care_state(state: dict) -> None:
-    CARE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CARE_STATE_PATH.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    """原子写入关怀状态。"""
+    try:
+        atomic_write_json(CARE_STATE_PATH, state)
+    except Exception as e:
+        # 写入失败保留旧状态，下次冷却期判断仍用旧时间戳；好过把状态丢空
+        print(f"[care_check] 状态写入失败（保留旧状态）: {e}", flush=True)
 
 
 def _can_send(state: dict, care_type: str) -> bool:
@@ -74,14 +70,17 @@ def _can_send(state: dict, care_type: str) -> bool:
         return True
     try:
         last_dt = datetime.fromisoformat(last_ts)
+        # 兼容历史 naive 时间戳（之前版本写入时未带时区）
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=CST)
         cooldown_h = _CARE_COOLDOWN.get(care_type, 12)
-        return datetime.now() - last_dt > timedelta(hours=cooldown_h)
+        return datetime.now(CST) - last_dt > timedelta(hours=cooldown_h)
     except Exception:
         return True
 
 
 def _mark_sent(state: dict, care_type: str) -> None:
-    state[f"last_{care_type}"] = datetime.now().isoformat()
+    state[f"last_{care_type}"] = datetime.now(CST).isoformat()
 
 
 def _send_care(message: str) -> bool:
@@ -111,7 +110,6 @@ def _get_urgent_ddls() -> list[dict]:
     try:
         cfg = dc.load_config()
         import ddl_checker as dc2
-        from datetime import timezone as _tz
         import datetime as _dt
         now = _dt.datetime.now(dc2.CST)
         deadline = now + timedelta(hours=24)
@@ -142,7 +140,7 @@ def _get_urgent_ddls() -> list[dict]:
 
 
 def run_care_check() -> None:
-    now = datetime.now()
+    now = datetime.now(CST)
     hour = now.hour
     profile = _load_profile()
     state = _load_care_state()

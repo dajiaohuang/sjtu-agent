@@ -28,7 +28,7 @@ from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
-from sjtu_agent.paths import CONFIG_PATH, SCHEDULE_CACHE_PATH as _SCHEDULE_CACHE_PATH
+from sjtu_agent.paths import CONFIG_PATH, ENV_PATH, SCHEDULE_CACHE_PATH as _SCHEDULE_CACHE_PATH
 
 try:
     from playwright.sync_api import sync_playwright
@@ -173,7 +173,7 @@ def fetch_canvas(cfg: dict) -> list[dict]:
                 if not a.get("submission_types"):
                     continue
                 due = parse_dt(a.get("due_at", ""))
-                if not due or due < NOW:
+                if not due or due < datetime.now(CST):
                     continue
                 pending.append({"id": a["id"], "name": a.get("name", "未知作业"), "due": due})
             asgn_url = r.links.get("next", {}).get("url")
@@ -216,133 +216,224 @@ def fetch_canvas(cfg: dict) -> list[dict]:
 # ── Platform 2: sjtu.aihaoke.net ─────────────────────────────────────────────
 # Bearer token 就存在 aihaoke_cookies["haoke-token"] 里，直接用 requests 调 API。
 
-def _fetch_aihaoke_enrolled_courses(headers: dict) -> list[dict] | None:
+_AIHAOKE_COURSES_TTL_SECONDS = 7 * 24 * 3600  # 课程列表缓存 7 天
+
+
+def _aihaoke_courses_cache_fresh(cfg: dict) -> bool:
+    """判断 config.json 中的 aihaoke_courses 是否仍在 TTL 内。"""
+    ts = cfg.get("aihaoke_courses_fetched_at")
+    if not isinstance(ts, (int, float)):
+        return False
+    return (datetime.now().timestamp() - float(ts)) < _AIHAOKE_COURSES_TTL_SECONDS
+
+
+def _fetch_aihaoke_enrolled_courses(cfg: dict) -> list[dict] | None:
     """
-    调用 aihaoke API 获取当前用户已选修的课程列表。
-    返回格式与 AIHAOKE_COURSES 一致：[{"name": ..., "courseId": ..., "instanceId": ...}, ...]
-    若 API 不可用或返回空，返回 None（由调用方决定是否回退）。
+    通过 aihaoke 官方"我的班级"API 获取用户当前选修课程。
+    直接命中 /api/teach/instance/listMyClass（浏览器端进入 /student/course 时调用的接口）。
+    用 Playwright 上下文发起请求以携带完整的 WAF/Referer，稳定性最高。
     """
-    import uuid as _uuid
+    if not HAS_PLAYWRIGHT:
+        return None
 
-    # 尝试学生端"我的课程"接口
-    try:
-        resp = requests.post(
-            "https://sjtu.aihaoke.net/api/learn/course/listMyCourse",
-            json={
-                "page": {"pageNo": 1, "pageSize": 200},
-                "requestId": str(_uuid.uuid4()),
-            },
-            headers=headers,
-            timeout=15,
-        )
-        data = resp.json()
-        if data.get("code") == 401:
-            return None  # token 无效，由 fetch_aihaoke 统一处理
-        rows = data.get("data", {}).get("rowList") or data.get("data", {}).get("list") or []
-        if rows:
-            courses = []
-            for c in rows:
-                # 只保留学生确实已选修/加入的课程
-                # joinStatus=1 / selectStatus=1 / studentStatus=1 表示已加入
-                # 若字段不存在（老版本接口），默认保留（不过滤）
-                join_status   = c.get("joinStatus")
-                select_status = c.get("selectStatus")
-                student_status = c.get("studentStatus")
-                enroll_status = c.get("enrollStatus")
-                # 任一已知状态字段明确为"未加入/已退出"时跳过
-                if join_status is not None and join_status not in (1, "1", True, "true", "joined"):
-                    continue
-                if select_status is not None and select_status not in (1, "1", True, "true"):
-                    continue
-                if student_status is not None and student_status not in (1, "1", True, "true", "active"):
-                    continue
-                if enroll_status is not None and enroll_status not in (1, "1", True, "true", "enrolled"):
-                    continue
-                cid = c.get("courseId") or c.get("classId") or c.get("id")
-                iid = c.get("instanceId") or c.get("id")
-                name = c.get("courseName") or c.get("className") or c.get("name") or f"课程{cid}"
-                if cid:
-                    courses.append({"name": name, "courseId": int(cid), "instanceId": int(iid or cid)})
-            if courses:
-                return courses
-    except Exception:
-        pass
-
-    # 备用接口
-    fallback_urls = [
-        "https://sjtu.aihaoke.net/api/learn/student/course/list",
-        "https://sjtu.aihaoke.net/api/student/course/list",
-    ]
-    for url in fallback_urls:
-        try:
-            resp = requests.post(
-                url,
-                json={"page": {"pageNo": 1, "pageSize": 200}, "requestId": str(_uuid.uuid4())},
-                headers=headers,
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                continue
-            data = resp.json()
-            if data.get("code") == 401:
-                return None
-            rows = (data.get("data") or {})
-            if isinstance(rows, list):
-                pass
-            else:
-                rows = rows.get("rowList") or rows.get("list") or []
-            if rows:
-                courses = []
-                for c in rows:
-                    cid = c.get("courseId") or c.get("classId") or c.get("id")
-                    iid = c.get("instanceId") or c.get("id")
-                    name = c.get("courseName") or c.get("className") or c.get("name") or f"课程{cid}"
-                    if cid:
-                        courses.append({"name": name, "courseId": int(cid), "instanceId": int(iid or cid)})
-                if courses:
-                    return courses
-        except Exception:
-            continue
-
-    return None
-
-
-def fetch_aihaoke(cfg: dict) -> list[dict]:
-    """直接调用 aihaoke REST API 获取必做任务。"""
-    import uuid as _uuid
+    ok, error = refresh_aihaoke_cookies(cfg)
+    if not ok:
+        print(f"[aihaoke] cookies 刷新失败：{error}")
+        return None
 
     raw_cookies = cfg.get("aihaoke_cookies", {})
     token = raw_cookies.get("haoke-token", "").strip()
     if not token:
-        print("[aihaoke] ⚠ 未配置 aihaoke_cookies[haoke-token]，跳过")
+        return None
+
+    import uuid as _uuid
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            ctx = browser.new_context()
+            ctx.add_cookies([
+                {"name": k, "value": v, "domain": "sjtu.aihaoke.net", "path": "/"}
+                for k, v in raw_cookies.items()
+            ])
+            # 先访问学生页，让浏览器建立 referer / WAF 上下文
+            page = ctx.new_page()
+            try:
+                page.goto(
+                    "https://sjtu.aihaoke.net/student/course",
+                    wait_until="domcontentloaded",
+                    timeout=20000,
+                )
+            except Exception:
+                pass
+            finally:
+                page.close()
+
+            resp = ctx.request.post(
+                "https://sjtu.aihaoke.net/api/teach/instance/listMyClass",
+                data=json.dumps({
+                    "instanceName": "",
+                    "classId": 0,
+                    "requestId": str(_uuid.uuid4()),
+                }),
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "Referer": "https://sjtu.aihaoke.net/student/course",
+                },
+                timeout=20000,
+            )
+            try:
+                data = resp.json()
+            finally:
+                browser.close()
+    except Exception as e:
+        print(f"[aihaoke] 调用 listMyClass 失败：{e}")
+        return None
+
+    if data.get("code") == 401:
+        print("[aihaoke] listMyClass 返回 401，token 可能失效")
+        return None
+
+    payload = data.get("data")
+    if isinstance(payload, dict):
+        rows = (
+            payload.get("teachClassResponseList")
+            or payload.get("rowList")
+            or payload.get("list")
+            or []
+        )
+    elif isinstance(payload, list):
+        rows = payload
+    else:
+        rows = []
+
+    courses: list[dict] = []
+    for c in rows:
+        cid = c.get("classId") or c.get("courseId") or c.get("id")
+        iid = c.get("instanceId") or c.get("id") or cid
+        name = (
+            c.get("instanceName")
+            or c.get("courseName")
+            or c.get("className")
+            or c.get("name")
+            or (f"课程{cid}" if cid else "")
+        )
+        if not cid or not name:
+            continue
+        courses.append({
+            "name": str(name).strip(),
+            "courseId": int(cid),
+            "instanceId": int(iid or cid),
+        })
+
+    if not courses:
+        print(f"[aihaoke] listMyClass 返回空列表，响应：{json.dumps(data, ensure_ascii=False)[:300]}")
+        return None
+
+    cfg["aihaoke_courses"] = courses
+    cfg["aihaoke_courses_fetched_at"] = datetime.now().timestamp()
+    CONFIG_PATH.write_text(
+        json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"[aihaoke] ✓ 自动识别到 {len(courses)} 门课程：{[c['name'] for c in courses]}")
+    return courses
+
+
+def _aihaoke_token_works(token: str) -> bool:
+    """快速检测 aihaoke token 是否能正常调用任务列表 API（不启动浏览器）。"""
+    import uuid as _uuid
+    if not token:
+        return False
+    try:
+        resp = requests.post(
+            "https://sjtu.aihaoke.net/api/learn/task/listTask",
+            json={
+                "classId": 0,
+                "orderType": 0,
+                "page": {"pageNo": 1, "pageSize": 1},
+                "searchText": "",
+                "status": 0,
+                "taskTypes": [],
+                "requireFlag": 1,
+                "requestId": str(_uuid.uuid4()),
+            },
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            timeout=10,
+        )
+        data = resp.json()
+        # 401 = token 过期；404 = 接口正常但 classId=0 不存在（说明 token 有效）
+        return data.get("code") != 401
+    except Exception:
+        return False
+
+
+def fetch_aihaoke(cfg: dict, *, force_refresh_courses: bool = False) -> list[dict]:
+    """获取 aihaoke 必做任务。优先纯 API，token 失效时才启动 Playwright 刷新。"""
+    import uuid as _uuid
+
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(ENV_PATH)
+        load_dotenv()
+    except ImportError:
+        pass
+
+    raw_cookies = cfg.get("aihaoke_cookies", {})
+    token = raw_cookies.get("haoke-token", "").strip()
+    has_creds = bool(
+        os.environ.get("JACCOUNT_USERNAME", "").strip()
+        and os.environ.get("JACCOUNT_PASSWORD", "").strip()
+    )
+    if not token and not has_creds:
+        print("[aihaoke] ⚠ 未配置 aihaoke_cookies[haoke-token] 且缺少 jAccount 凭据，跳过")
         return []
+
+    # 快速验证 token（纯 requests，< 1s）；token 为空或失效都触发刷新
+    if not token or not _aihaoke_token_works(token):
+        print("[aihaoke] Token 缺失或已过期，正在登录…")
+        ok, error = refresh_aihaoke_cookies(cfg)
+        if not ok:
+            print(f"[aihaoke] ⚠ 登录失败：{error}")
+            return []
+        raw_cookies = cfg.get("aihaoke_cookies", {})
+        token = raw_cookies.get("haoke-token", "").strip()
 
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
 
-    # 优先使用 config.json 中用户自定义的课程列表；
-    # 未配置时自动从 aihaoke API 获取用户实际选修课程；
-    # API 不可用时返回空列表——不使用硬编码默认列表，避免向没有对应课程的用户推送错误提醒。
-    courses = cfg.get("aihaoke_courses")
-    if not courses:
-        print("[aihaoke] 正在自动获取选修课程列表…")
-        courses = _fetch_aihaoke_enrolled_courses(headers)
-        if courses:
-            print(f"[aihaoke] ✓ 获取到 {len(courses)} 门课程：{[c['name'] for c in courses]}")
+    # 课程列表：优先用未过期的缓存；否则调用 listMyClass API 自动发现
+    courses = cfg.get("aihaoke_courses") or []
+    cache_fresh = _aihaoke_courses_cache_fresh(cfg)
+    if force_refresh_courses or not courses or not cache_fresh:
+        if force_refresh_courses:
+            print("[aihaoke] 强制刷新选修课程列表…")
+        elif not courses:
+            print("[aihaoke] 正在自动识别选修课程列表…")
         else:
-            print("[aihaoke] ⚠ 无法自动获取课程列表，跳过 aihaoke DDL 检查")
+            print("[aihaoke] 课程缓存已过期，重新识别…")
+        discovered = _fetch_aihaoke_enrolled_courses(cfg)
+        if discovered:
+            courses = discovered
+        elif courses:
+            print("[aihaoke] ⚠ 自动识别失败，沿用历史缓存继续运行")
+        else:
+            print("[aihaoke] ⚠ 未能识别到任何已选修课程，跳过")
             return []
 
     if not courses:
         print("[aihaoke] ⚠ 课程列表为空，跳过")
         return []
 
-    results: list[dict] = []
-    for course in courses:
-        cid   = course["courseId"]
+    def _fetch_one(course: dict) -> tuple[list[dict], bool]:
+        """拉取单课程全部页面，返回 (tasks, token_expired)。"""
+        cid = course["courseId"]
         cname = course["name"]
+        tasks: list[dict] = []
         page_no = 1
         while True:
             body = {
@@ -363,11 +454,10 @@ def fetch_aihaoke(cfg: dict) -> list[dict]:
                 data = resp.json()
             except Exception as e:
                 print(f"  [aihaoke] {cname} 第{page_no}页请求失败：{e}")
-                break
+                return tasks, False
 
             if data.get("code") == 401:
-                print("[aihaoke] ⚠ Token 已过期，请用 save_credentials 更新 aihaoke_cookies")
-                return results
+                return tasks, True
 
             rows = data.get("data", {}).get("rowList", [])
             total_pages = data.get("data", {}).get("pageCount", 1)
@@ -376,9 +466,9 @@ def fetch_aihaoke(cfg: dict) -> list[dict]:
                 if t.get("myStatus") != 10:
                     continue
                 due = parse_dt(t.get("endTime", ""))
-                if not due or due < NOW:
+                if not due or due < datetime.now(CST):
                     continue
-                results.append({
+                tasks.append({
                     "platform": "aihaoke",
                     "course": cname,
                     "name": t.get("taskName", "未知任务").strip(),
@@ -389,6 +479,20 @@ def fetch_aihaoke(cfg: dict) -> list[dict]:
             if page_no >= total_pages:
                 break
             page_no += 1
+        return tasks, False
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    results: list[dict] = []
+    token_expired = False
+    with ThreadPoolExecutor(max_workers=min(len(courses), 4)) as pool:
+        futures = {pool.submit(_fetch_one, c): c for c in courses}
+        for fut in as_completed(futures):
+            tasks, expired = fut.result()
+            results.extend(tasks)
+            if expired:
+                token_expired = True
+    if token_expired:
+        print("[aihaoke] ⚠ Token 已过期，请运行 python login.py --aihaoke 刷新")
 
     return results
 
@@ -402,6 +506,7 @@ def refresh_aihaoke_cookies(cfg: dict) -> tuple[bool, str]:
 
     try:
         from dotenv import load_dotenv
+        load_dotenv(ENV_PATH)
         load_dotenv()
     except ImportError:
         pass
@@ -456,7 +561,7 @@ def refresh_aihaoke_cookies(cfg: dict) -> tuple[bool, str]:
                 ])
                 page = ctx.new_page()
                 try:
-                    page.goto("https://sjtu.aihaoke.net/student", wait_until="networkidle", timeout=12_000)
+                    page.goto("https://sjtu.aihaoke.net/student", wait_until="domcontentloaded", timeout=12_000)
                 except Exception:
                     pass
                 finally:
@@ -735,7 +840,7 @@ def _parse_phycai_table(html: str) -> dict | None:
         m = re.search(r"\d{1,2}:\d{2}", time_str)
         time_start = m.group() if m else ""
         dt = _parse_phycai_dt(date_str, time_start)
-        if dt and dt > NOW:
+        if dt and dt > datetime.now(CST):
             experiments.append({
                 "name":     cell("name"),
                 "dt":       dt,
@@ -887,21 +992,97 @@ def _icourse_login_with_creds(cfg: dict) -> dict | None:
         return None
 
 
+def _discover_icourse_term_id(cookies: dict, course_id: str) -> int | None:
+    """
+    用 Playwright 访问课程页，从 URL 或页面数据中提取当前 term_id。
+    course_id 格式如 'SJTU-1449794172'
+    """
+    if not HAS_PLAYWRIGHT:
+        return None
+    
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            ctx = browser.new_context()
+            ctx.add_cookies([
+                {"name": k, "value": v, "domain": ".icourse163.org", "path": "/"}
+                for k, v in cookies.items()
+            ])
+            page = ctx.new_page()
+            
+            # 访问课程主页，会自动跳转到当前学期
+            page.goto(f"https://www.icourse163.org/course/{course_id}", 
+                     wait_until="domcontentloaded", timeout=20000)
+            page.wait_for_timeout(2000)
+            
+            # 从 URL 提取 tid 参数
+            final_url = page.url
+            browser.close()
+            
+            import re
+            m = re.search(r'[?&]tid=(\d+)', final_url)
+            if m:
+                return int(m.group(1))
+            
+            # 如果 URL 没有，尝试从页面 JS 变量提取
+            # （这里可以扩展更多提取逻辑）
+            return None
+    except Exception as e:
+        print(f"[icourse163] 发现 term_id 失败：{e}")
+        return None
+
+
 def fetch_icourse(cfg: dict) -> list[dict]:
-    """获取中国大学MOOC得分为0且未过期的测试。"""
-    # 优先：用 .env 账号密码重新登录
-    new_cookies = _icourse_login_with_creds(cfg)
-    if new_cookies:
-        cookies = new_cookies
-    else:
-        cookies = cfg.get("icourse_cookies", {})
-        if not cookies or all(v.startswith("YOUR_") for v in cookies.values()):
-            print("[icourse163] ⚠ 未配置 icourse_cookies 且无 .env 凭据，跳过")
+    """获取中国大学MOOC得分为0且未过期的测试。优先用缓存的 cookies + term_id，失效时才重新登录。"""
+    cookies = cfg.get("icourse_cookies", {})
+    
+    # 快速验证 cookies 是否有效（纯 requests，< 1s）
+    if not cookies or not cookies.get("NTESSTUDYSI"):
+        print("[icourse163] cookies 未配置，正在登录…")
+        new_cookies = _icourse_login_with_creds(cfg)
+        if not new_cookies:
+            print("[icourse163] ⚠ 登录失败，跳过")
             return []
+        cookies = new_cookies
 
     session = make_session(cookies, referer="https://www.icourse163.org/")
     results: list[dict] = []
+    
+    # 从 config 读取缓存的 term_id（避免每次都 Playwright）
+    cached_terms = cfg.get("icourse_term_ids", {})
+    
     for course in ICOURSE_COURSES:
+        course_id = course.get("course_id", "")
+        if not course_id:
+            results.extend(_fetch_icourse_one(session, course, cookies))
+            continue
+        
+        # 优先用缓存的 term_id
+        cached_tid = cached_terms.get(course_id)
+        if cached_tid:
+            course = {**course, "term_id": cached_tid}
+            # 先试试缓存的 term_id 能否用
+            rpc_result = _icourse_rpc(session, cached_tid)
+            if rpc_result is not None:
+                results.extend(_parse_icourse_rpc(rpc_result, course["name"]))
+                continue
+            print(f"[icourse163] {course['name']} 缓存的 term_id 已失效")
+        
+        # 缓存失效或不存在，动态发现
+        print(f"[icourse163] 正在发现 {course['name']} 的当前学期…")
+        term_id = _discover_icourse_term_id(cookies, course_id)
+        if term_id:
+            print(f"[icourse163] ✓ 当前 term_id = {term_id}")
+            # 缓存到 config
+            cached_terms[course_id] = term_id
+            cfg["icourse_term_ids"] = cached_terms
+            CONFIG_PATH.write_text(
+                json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            course = {**course, "term_id": term_id}
+        else:
+            print(f"[icourse163] ⚠ 无法发现当前学期，使用配置的 term_id")
+        
         results.extend(_fetch_icourse_one(session, course, cookies))
     return results
 
@@ -1259,7 +1440,7 @@ def download_canvas_assignments(
                 if not a.get("submission_types"):
                     continue
                 due = parse_dt(a.get("due_at", ""))
-                if not due or due < NOW:
+                if not due or due < datetime.now(CST):
                     continue
                 assignment_name = a.get("name", "未知作业")
                 if not _matches_assignment_download_filters(
@@ -1404,7 +1585,7 @@ def download_aihaoke_assignments(
                 if t.get("taskType") not in (30, 50, 51, 70):
                     continue
                 due = parse_dt(t.get("endTime", ""))
-                if not due or due < NOW:
+                if not due or due < datetime.now(CST):
                     continue
 
                 task_id   = t.get("id")
@@ -2127,6 +2308,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip", nargs="+", choices=["canvas", "aihaoke", "phycai", "icourse"],
                    default=[], help="跳过指定平台")
     p.add_argument("--canvas-only", action="store_true", help="仅抓取 Canvas")
+    p.add_argument("--refresh-aihaoke-courses", action="store_true",
+                   help="强制重新从 aihaoke 拉取选修课程列表（学期换课后使用）")
     return p.parse_args()
 
 
@@ -2146,7 +2329,7 @@ def main() -> None:
 
     if "aihaoke" not in skip:
         print("[*] 正在获取 aihaoke 任务…")
-        all_ddl.extend(fetch_aihaoke(cfg))
+        all_ddl.extend(fetch_aihaoke(cfg, force_refresh_courses=args.refresh_aihaoke_courses))
 
     if "icourse" not in skip:
         print("[*] 正在获取 MOOC 测试…")

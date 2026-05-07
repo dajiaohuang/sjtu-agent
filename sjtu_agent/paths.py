@@ -42,6 +42,58 @@ USER_PROFILE_PATH     = DATA_DIR / "user_profile.json"
 CARE_STATE_PATH       = DATA_DIR / "care_state.json"
 
 
+def atomic_write_json(path: Path, data, *, indent: int = 2) -> None:
+    """原子写入 JSON：先写临时文件，再 os.replace 替换。
+
+    崩溃/磁盘满/被 SIGKILL 时绝不会留下半截写入的状态文件，避免下次启动时
+    误读成空对象触发"重发整批已发送提醒"事故。
+
+    使用：sjtu_agent.paths.atomic_write_json(REMIND_STATE_PATH, state)
+    """
+    import json as _json
+    import os as _os
+    import tempfile as _tempfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = _tempfile.mkstemp(
+        prefix=path.name + ".",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as f:
+            _json.dump(data, f, ensure_ascii=False, indent=indent)
+            f.flush()
+            try:
+                _os.fsync(f.fileno())  # 确保数据真的落盘
+            except OSError:
+                pass  # 某些文件系统/平台不支持 fsync
+        _os.replace(tmp_path, path)
+    except Exception:
+        try:
+            _os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def read_json_safe(path: Path, default=None):
+    """安全读取 JSON：文件不存在/损坏返回 default。
+
+    与 atomic_write_json 配套使用，避免每个调用方都写 try/except。
+    """
+    import json as _json
+
+    if default is None:
+        default = {}
+    if not path.exists():
+        return default
+    try:
+        return _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, _json.JSONDecodeError):
+        return default
+
+
 def _copy_if_missing(source: Path, target: Path) -> None:
     if target.exists() or not source.exists() or not source.is_file():
         return

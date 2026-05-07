@@ -13,6 +13,15 @@ _debug_*.py
 mysjtu_catalog.json
 reminders.json
 remind_state.json
+.shuiyuan_watcher_state.json
+care_state.json
+user_profile.json
+.ddl_cache.json
+
+# Local notes / unrelated articles dropped into the repo
+*.html
+*_files/
+!sjtu_agent/web/static/*.html
 
 # Downloaded assignment materials and local test captures
 assignments/

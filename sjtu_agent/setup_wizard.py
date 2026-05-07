@@ -328,10 +328,10 @@ def _print_setup_status(status: dict) -> None:
     _print_check("config.json", status["config_file_exists"], str(CONFIG_PATH))
     _print_check("jAccount credentials", status["jaccount"]["has_credentials"], str(ENV_PATH))
     _print_check("Canvas token", status["canvas"]["has_token"], status["canvas"]["settings_url"])
-    _print_check("aihaoke cookies", status["aihaoke"]["has_cookies"])
-    _print_check("phycai cookies", status["phycai"]["has_cookies"])
-    _print_check("icourse credentials", status["icourse"]["has_credentials"])
-    _print_check("icourse cookies", status["icourse"]["has_cookies"])
+    _print_check("AI 好课 (aihaoke) cookies", status["aihaoke"]["has_cookies"])
+    _print_check("物理实验 (phycai) cookies", status["phycai"]["has_cookies"])
+    _print_check("中国大学 MOOC (icourse) credentials", status["icourse"]["has_credentials"])
+    _print_check("中国大学 MOOC (icourse) cookies", status["icourse"]["has_cookies"])
     _print_check(
         "shuiyuan access",
         status["shuiyuan"]["has_api_key"] or status["shuiyuan"]["has_cookies"],
@@ -592,7 +592,7 @@ class SetupConversation:
         text = raw.strip().lower()
         paths = describe_runtime_paths()
         if "cookie" in text or "chrome" in text or "登录" in text:
-            return "我会从本机 Chrome 里读取你已经登录过的 aihaoke、phycai、icourse cookie，然后写进 config.json。你不用手工拷贝 cookie 值。"
+            return "我会从本机 Chrome 里读取你已经登录过的 AI 好课（aihaoke）、物理实验（phycai）、中国大学 MOOC（icourse）cookie，然后写进 config.json。你不用手工拷贝 cookie 值。"
         if "llm" in text or "模型" in text or "api key" in text or "base url" in text:
             return (
                 "我会先把驱动 Agent 的大模型接口写进 agent_config.json。"
@@ -618,11 +618,11 @@ class SetupConversation:
                 f"环境变量在 {paths['env_path']}。"
             )
         if step == "jaccount":
-            return "jAccount 账号密码主要用来自动刷新 aihaoke、phycai 和水源相关登录态。没有这一步，很多自动化能力会退化成手工配置。"
+            return "jAccount 账号密码主要用来自动刷新 AI 好课（aihaoke）、物理实验（phycai）和水源相关登录态。没有这一步，很多自动化能力会退化成手工配置。"
         if step == "mooc":
             return "MOOC 账号密码只影响 icourse/中国大学 MOOC 这一路。如果你暂时不用这个平台，可以先跳过。"
         if step == "cookies":
-            return "cookie 导入会优先补齐 aihaoke、phycai、icourse 的现有登录态。如果你还没在 Chrome 里登录这些站点，先登录再回来导入最省事。"
+            return "cookie 导入会优先补齐 AI 好课（aihaoke）、物理实验（phycai）、中国大学 MOOC（icourse）的现有登录态。如果你还没在 Chrome 里登录这些站点，先登录再回来导入最省事。"
         if step == "launchd":
             return "这一步只是在 macOS 里登记后台服务，不会修改你的课程数据。以后你也可以随时重跑 setup 或 install-daemons 来更新它。"
         return "这一步的目标是把缺的配置补齐。你可以直接继续、跳过，或者输入 status 查看我当前检测到的缺口。"
@@ -768,7 +768,7 @@ class SetupConversation:
         return True
 
     def handle_jaccount(self, status: dict) -> bool:
-        self.say("我建议先补齐 jAccount 用户名和密码。这样我才能自动刷新 aihaoke、phycai 和水源相关登录态。")
+        self.say("我建议先补齐 jAccount 用户名和密码。这样我才能自动刷新 AI 好课（aihaoke）、物理实验（phycai）和水源相关登录态。")
         self.say("请直接输入 jAccount 用户名（不是学号！是你登录 my.sjtu.edu.cn 时使用的英文用户名，通常是拼音或姓名缩写，例如 zhangsan），或者回复 skip。")
         while True:
             raw = self.prompt()
@@ -912,11 +912,11 @@ class SetupConversation:
     def handle_cookies(self, status: dict) -> bool:
         missing = []
         if not status["aihaoke"]["has_cookies"]:
-            missing.append("aihaoke")
+            missing.append("AI 好课")
         if not status["phycai"]["has_cookies"]:
-            missing.append("phycai")
+            missing.append("物理实验")
         if not status["icourse"]["has_cookies"]:
-            missing.append("icourse")
+            missing.append("中国大学 MOOC")
         missing_text = ", ".join(missing) if missing else "课程平台"
         self.say(f"我还缺这些站点的登录态：{missing_text}。如果你已经在 Chrome 里登录过，我现在可以自动导入。")
         self.say("准备好了就回复继续；如果你想稍后自己登录 Chrome 再回来，回复 skip。")

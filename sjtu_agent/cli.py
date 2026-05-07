@@ -139,6 +139,12 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     return _run_module("mcp_server", args.script_args)
 
 
+def _cmd_web(args: argparse.Namespace) -> int:
+    from sjtu_agent.web.server import start
+    start(port=args.port, open_browser=not args.no_browser)
+    return 0
+
+
 def _cmd_wechat_bot(args: argparse.Namespace) -> int:
     # wechat_bot.py 位于项目根目录，用 run_path 直接执行脚本文件
     root = Path(__file__).resolve().parent.parent
@@ -218,6 +224,20 @@ def build_parser() -> argparse.ArgumentParser:
     _add_passthrough_parser(subparsers, "remind-check", "run the reminder daemon once", _cmd_remind_check)
     _add_passthrough_parser(subparsers, "mcp", "start the MCP server", _cmd_mcp)
     _add_passthrough_parser(subparsers, "wechat-bot", "start the WeChat ilink bot (long-polling)", _cmd_wechat_bot)
+
+    web_parser = subparsers.add_parser("web", help="open the local web configuration UI in your browser")
+    web_parser.add_argument(
+        "--port",
+        type=int,
+        default=7860,
+        help="port to listen on (default: 7860)",
+    )
+    web_parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="start the server without opening the browser automatically",
+    )
+    web_parser.set_defaults(func=_cmd_web)
 
     _platform_name = current_platform_name()
     install_daemons_parser = subparsers.add_parser(

@@ -73,19 +73,14 @@ def _save_reminders(reminders: list[dict]) -> None:
 
 
 def _load_state() -> dict:
-    if not STATE_PATH.exists():
-        return {}
-    try:
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    from sjtu_agent.paths import read_json_safe
+    return read_json_safe(STATE_PATH, default={})
 
 
 def _save_state(state: dict) -> None:
-    STATE_PATH.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    """原子写入；失败时仍抛出异常，让调用方决定是否回滚已发送标记。"""
+    from sjtu_agent.paths import atomic_write_json
+    atomic_write_json(STATE_PATH, state)
 
 
 def _parse_dt(s: str) -> datetime | None:

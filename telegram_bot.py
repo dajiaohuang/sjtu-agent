@@ -152,6 +152,350 @@ def _capture_turn(sess: dict, user_text: str) -> str:
     return clean[idx + len(marker):].strip()
 
 
+# ── 流式推进（带工具进度回调） ──────────────────────────────────────────────
+
+def _streamed_turn(sess: dict, user_text: str, on_progress) -> str:
+    """
+    运行一轮对话，期间通过 on_progress(event_type, payload) 实时上报：
+      - on_progress("tool_start", {"name": str})
+      - on_progress("tool_end",   {"name": str, "elapsed_ms": int})
+      - on_progress("first_token", {})           # 收到第一个文本 token
+      - on_progress("text_chunk",  {"text": str}) # 累积 buffer 已超阈值
+    返回完整文本回复。tool_use 循环最多 8 轮。
+    """
+    import time as _time
+    import json as _json
+
+    _init_messages(sess)
+    if sess["messages"] and sess["messages"][0]["role"] == "system":
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx()
+    sess["messages"].append({"role": "user", "content": user_text})
+
+    client = sess["client_box"][0]
+    model = sess["model_box"][0]
+    is_anthropic = agent._is_anthropic_model(model)
+
+    full_text = ""
+    MAX_ROUNDS = 8
+    saw_first_token_global = [False]
+
+    def _emit_first_token():
+        if saw_first_token_global[0]:
+            return
+        saw_first_token_global[0] = True
+        try: on_progress("first_token", {})
+        except Exception: pass
+
+    if is_anthropic:
+        system_msg = sess["messages"][0]["content"] if sess["messages"][0]["role"] == "system" else ""
+        api_msgs = [m for m in sess["messages"] if m["role"] != "system"]
+        tools = agent._anthropic_tools()
+
+        for _round in range(MAX_ROUNDS):
+            content_blocks: list[dict] = []
+            tool_inputs: dict[int, str] = {}
+            text_so_far = ""
+
+            with client.messages.stream(
+                model=model,
+                max_tokens=4096,
+                system=system_msg,
+                messages=api_msgs,
+                tools=tools,
+            ) as stream:
+                for event in stream:
+                    etype = getattr(event, "type", "")
+                    if etype == "content_block_start":
+                        block = event.content_block
+                        btype = getattr(block, "type", "")
+                        if btype == "text":
+                            content_blocks.append({"type": "text", "text": ""})
+                        elif btype == "tool_use":
+                            content_blocks.append({
+                                "type": "tool_use",
+                                "id": block.id,
+                                "name": block.name,
+                                "input": {},
+                            })
+                            tool_inputs[len(content_blocks) - 1] = ""
+                    elif etype == "content_block_delta":
+                        delta = event.delta
+                        dtype = getattr(delta, "type", "")
+                        if dtype == "text_delta":
+                            chunk = delta.text
+                            text_so_far += chunk
+                            full_text += chunk
+                            if content_blocks and content_blocks[-1].get("type") == "text":
+                                content_blocks[-1]["text"] += chunk
+                            _emit_first_token()
+                        elif dtype == "input_json_delta":
+                            idx = event.index
+                            tool_inputs[idx] = tool_inputs.get(idx, "") + delta.partial_json
+
+            for idx, raw_json in tool_inputs.items():
+                if idx < len(content_blocks) and content_blocks[idx].get("type") == "tool_use":
+                    try:
+                        content_blocks[idx]["input"] = _json.loads(raw_json or "{}")
+                    except Exception:
+                        content_blocks[idx]["input"] = {}
+
+            has_tool_use = any(b.get("type") == "tool_use" for b in content_blocks)
+            api_msgs.append({"role": "assistant", "content": content_blocks})
+            sess["messages"].append({"role": "assistant", "content": content_blocks})
+
+            if not has_tool_use:
+                return full_text
+
+            tool_results = []
+            for b in content_blocks:
+                if b.get("type") != "tool_use":
+                    continue
+                fn_name = b["name"]
+                fn_args = b["input"] if isinstance(b["input"], dict) else {}
+                try: on_progress("tool_start", {"name": fn_name})
+                except Exception: pass
+                t0 = _time.monotonic()
+                result = agent.run_tool(fn_name, fn_args)
+                elapsed_ms = int((_time.monotonic() - t0) * 1000)
+                try: on_progress("tool_end", {"name": fn_name, "elapsed_ms": elapsed_ms})
+                except Exception: pass
+                tool_results.append({"type": "tool_result", "tool_use_id": b["id"], "content": result})
+            api_msgs.append({"role": "user", "content": tool_results})
+            sess["messages"].append({"role": "user", "content": tool_results})
+
+        return full_text
+
+    # ── OpenAI 兼容路径 ──────────────────────────────────────────────────────
+    messages = list(sess["messages"])
+
+    for _round in range(MAX_ROUNDS):
+        text_so_far = ""
+        tool_calls_map: dict[int, dict] = {}
+
+        stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=agent.TOOLS,
+            tool_choice="auto",
+            stream=True,
+            timeout=180,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                text_so_far += delta.content
+                full_text += delta.content
+                _emit_first_token()
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    idx = tc.index
+                    if idx not in tool_calls_map:
+                        tool_calls_map[idx] = {"id": tc.id or "", "name": "", "arguments": ""}
+                    if tc.id:
+                        tool_calls_map[idx]["id"] = tc.id
+                    if tc.function:
+                        if tc.function.name:
+                            tool_calls_map[idx]["name"] = tc.function.name
+                        if tc.function.arguments:
+                            tool_calls_map[idx]["arguments"] += tc.function.arguments
+
+        if not tool_calls_map:
+            sess["messages"].append({"role": "assistant", "content": text_so_far})
+            return full_text
+
+        from openai.types.chat import ChatCompletionMessageToolCall, ChatCompletionMessage
+        from openai.types.chat.chat_completion_message_tool_call import Function
+
+        tc_objs = []
+        for idx in sorted(tool_calls_map):
+            e = tool_calls_map[idx]
+            tc_objs.append(ChatCompletionMessageToolCall(
+                id=e["id"], type="function",
+                function=Function(name=e["name"], arguments=e["arguments"]),
+            ))
+        assistant_msg = ChatCompletionMessage(
+            role="assistant", content=text_so_far or None, tool_calls=tc_objs,
+        )
+        messages.append(assistant_msg)
+        sess["messages"].append(assistant_msg)
+
+        for tc in tc_objs:
+            fn_name = tc.function.name
+            try: fn_args = _json.loads(tc.function.arguments or "{}")
+            except Exception: fn_args = {}
+            try: on_progress("tool_start", {"name": fn_name})
+            except Exception: pass
+            t0 = _time.monotonic()
+            result = agent.run_tool(fn_name, fn_args)
+            elapsed_ms = int((_time.monotonic() - t0) * 1000)
+            try: on_progress("tool_end", {"name": fn_name, "elapsed_ms": elapsed_ms})
+            except Exception: pass
+            tool_msg = {"role": "tool", "tool_call_id": tc.id, "content": result}
+            messages.append(tool_msg)
+            sess["messages"].append(tool_msg)
+
+    return full_text
+
+
+# ── LLM 预拦截：高频问题直接调工具，跳过整轮 LLM ─────────────────────────────
+
+_QUICK_INTENTS: list[tuple["re.Pattern", str]] = [
+    # DDL 相关
+    (re.compile(r"^(我?(还|目前|现在|最近)?有(哪些|什么|啥)?\s*(ddl|DDL|作业|截止|要交))\W*$"), "ddl"),
+    (re.compile(r"^\s*(查|看|要|给我|帮我看?)?\s*(ddl|DDL)\s*[?？!！。.]*$"), "ddl"),
+    (re.compile(r"^\s*(临近|最近|近期)\s*(的)?(ddl|DDL|作业)\W*$"), "ddl"),
+    # 课表
+    (re.compile(r"^(今天|今日)(我)?(有(什么|啥|哪些)?)?\s*课\W*$"), "schedule_today"),
+    (re.compile(r"^(明天|明日)(我)?(有(什么|啥|哪些)?)?\s*课\W*$"), "schedule_tomorrow"),
+    # 物理实验
+    (re.compile(r"^(下次|下一次|下一节)\s*(物理)?实验\W*$"), "next_lab"),
+    # 提醒列表
+    (re.compile(r"^\s*(我的)?提醒(事项)?\s*(列表)?\W*$"), "list_reminders"),
+]
+
+
+def _try_quick_intent(user_text: str) -> tuple[str, str] | None:
+    """如果命中预拦截规则，直接跑工具并返回 (label, html_reply)；否则返回 None。
+    跳过 LLM 推理可省 5-10s/次。"""
+    text = (user_text or "").strip()
+    if len(text) > 50:
+        return None  # 长消息留给 LLM
+    for pattern, intent in _QUICK_INTENTS:
+        if not pattern.match(text):
+            continue
+        try:
+            if intent == "ddl":
+                raw = agent.run_tool("get_ddls", {})
+                return ("DDL", _format_ddls_for_telegram(raw))
+            if intent == "schedule_today":
+                raw = agent.run_tool("get_schedule", {"query_type": "day", "date": "今天"})
+                return ("今日课表", _format_schedule_for_telegram(raw, "今天"))
+            if intent == "schedule_tomorrow":
+                raw = agent.run_tool("get_schedule", {"query_type": "day", "date": "明天"})
+                return ("明日课表", _format_schedule_for_telegram(raw, "明天"))
+            if intent == "next_lab":
+                raw = agent.run_tool("get_next_lab", {})
+                return ("下次物理实验", _format_next_lab_for_telegram(raw))
+            if intent == "list_reminders":
+                raw = agent.run_tool("list_reminders", {})
+                return ("提醒事项", _format_reminders_for_telegram(raw))
+        except Exception:
+            return None  # 工具失败时退回到 LLM
+    return None
+
+
+_PLATFORM_CN = {
+    "canvas":     "Canvas",
+    "Canvas":     "Canvas",
+    "aihaoke":    "AI 好课",
+    "icourse163": "中国大学 MOOC",
+    "icourse":    "中国大学 MOOC",
+    "phycai":     "物理实验",
+}
+
+
+def _format_ddls_for_telegram(raw_json: str) -> str:
+    """把 tool_get_ddls 的 JSON 输出渲染成 Telegram HTML。"""
+    try:
+        data = json.loads(raw_json)
+    except Exception:
+        return "❌ 获取 DDL 失败，请重试。"
+    ddls = data.get("ddls") or []
+    if not ddls:
+        return "🎉 <b>没有未完成的 DDL</b>，可以放心休息了。"
+    lines = ["📋 <b>未完成 DDL</b>\n"]
+    for d in ddls[:30]:
+        platform = _PLATFORM_CN.get(d.get("platform", ""), d.get("platform", ""))
+        course = (d.get("course") or "").strip()
+        name = (d.get("name") or "未命名作业").strip()
+        due = d.get("due") or ""
+        hours_left = d.get("hours_left")
+        if isinstance(hours_left, (int, float)):
+            if hours_left < 24:
+                left = f"还剩 <b>{int(hours_left)} 小时</b>"
+            else:
+                left = f"还剩 {int(hours_left/24)} 天"
+        else:
+            left = ""
+        head = f"• <b>{name}</b>"
+        meta = f"  {platform} · {course}".rstrip(" ·")
+        tail = f"  📅 {due} {('· ' + left) if left else ''}".strip()
+        lines.append(head)
+        if course or platform:
+            lines.append(meta)
+        lines.append(tail)
+    if len(ddls) > 30:
+        lines.append(f"\n…共 {len(ddls)} 项，仅显示前 30 项。")
+    return "\n".join(lines)
+
+
+def _format_schedule_for_telegram(raw_json: str, label: str) -> str:
+    try:
+        data = json.loads(raw_json)
+    except Exception:
+        return "❌ 获取课表失败。"
+    if data.get("error"):
+        return f"❌ {data['error']}"
+    classes = data.get("classes") or data.get("items") or []
+    if not classes:
+        return f"📭 <b>{label}没有课</b>。"
+    lines = [f"📅 <b>{label}的课</b>\n"]
+    for c in classes:
+        name = c.get("name") or c.get("course_name") or "未知课程"
+        time_range = c.get("time") or c.get("time_range") or ""
+        room = c.get("room") or c.get("classroom") or ""
+        teacher = c.get("teacher") or ""
+        lines.append(f"• <b>{name}</b>")
+        meta_parts = [time_range, room, teacher]
+        meta = "  " + " · ".join(p for p in meta_parts if p)
+        if meta.strip():
+            lines.append(meta)
+    return "\n".join(lines)
+
+
+def _format_next_lab_for_telegram(raw_json: str) -> str:
+    try:
+        data = json.loads(raw_json)
+    except Exception:
+        return "❌ 获取实验安排失败。"
+    lab = data.get("lab") or data
+    if not lab or not (lab.get("name") or lab.get("title")):
+        return "📭 没有查到下次物理实验安排。"
+    name = lab.get("name") or lab.get("title") or ""
+    when = lab.get("time") or lab.get("start_time") or ""
+    where = lab.get("location") or lab.get("room") or ""
+    lines = [f"🧪 <b>下次物理实验</b>\n"]
+    lines.append(f"• <b>{name}</b>")
+    if when:
+        lines.append(f"  🕐 {when}")
+    if where:
+        lines.append(f"  📍 {where}")
+    return "\n".join(lines)
+
+
+def _format_reminders_for_telegram(raw_json: str) -> str:
+    try:
+        data = json.loads(raw_json)
+    except Exception:
+        return "❌ 获取提醒事项失败。"
+    reminders = data.get("reminders") or []
+    if not reminders:
+        return "📭 没有提醒事项。"
+    lines = ["📌 <b>提醒事项</b>\n"]
+    for r in reminders[:30]:
+        title = (r.get("title") or "").strip()
+        start = r.get("start") or ""
+        end = r.get("end") or ""
+        when = start or end or ""
+        line = f"• <b>{title}</b>"
+        if when:
+            line += f"\n  📅 {when}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 # ── Markdown → Telegram HTML 转换 ────────────────────────────────────────────
 
 def _md_to_tg_html(text: str) -> str:
@@ -562,23 +906,87 @@ def handle_text(msg):
         bot.reply_to(msg, "⏳ 上一条消息还在处理中，请稍候…")
         return
 
-    bot.send_chat_action(chat_id, "typing")
+    user_text = msg.text.strip()
 
-    def run():
-        stop_typing = threading.Event()
-        typing_thread = threading.Thread(
-            target=_keep_typing, args=(chat_id, stop_typing), daemon=True
-        )
-        typing_thread.start()
+    # ── 预拦截：高频问题直接调工具，跳过 LLM ─────────────────────────────
+    quick = _try_quick_intent(user_text)
+    if quick is not None:
+        _, html_reply = quick
         try:
-            with lock:
-                reply = _capture_turn(sess, msg.text.strip())
-            html_reply = _md_to_tg_html(reply)
+            bot.send_chat_action(chat_id, "typing")
             _send_chunks(chat_id, html_reply, parse_mode="HTML")
         except Exception as e:
             bot.send_message(chat_id, f"❌ 出错了：{e}")
-        finally:
-            stop_typing.set()
+        return
+
+    bot.send_chat_action(chat_id, "typing")
+
+    def run():
+        # 进度状态消息：用 edit_message_text 反复更新
+        progress_msg = None
+        try:
+            progress_msg = bot.send_message(chat_id, "⏳ 正在思考…")
+        except Exception:
+            progress_msg = None
+
+        progress_lines: list[str] = []
+        last_edit_at = [0.0]
+        EDIT_THROTTLE_SEC = 0.6
+
+        import time as _t
+
+        def _edit_progress(force: bool = False):
+            if progress_msg is None:
+                return
+            now = _t.monotonic()
+            if not force and (now - last_edit_at[0] < EDIT_THROTTLE_SEC):
+                return
+            last_edit_at[0] = now
+            text = "\n".join(progress_lines) or "⏳ 正在思考…"
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_msg.message_id,
+                    text=text,
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass  # 编辑失败（被删/限流）忽略，最终回复仍会单独发
+
+        def on_progress(event_type: str, payload: dict):
+            if event_type == "tool_start":
+                label = agent._TOOL_LABELS.get(payload["name"], payload["name"])
+                progress_lines.append(f"⚙️ {label}…")
+                _edit_progress()
+            elif event_type == "tool_end":
+                if progress_lines:
+                    label = agent._TOOL_LABELS.get(payload["name"], payload["name"])
+                    elapsed = payload.get("elapsed_ms", 0)
+                    sec = elapsed / 1000
+                    progress_lines[-1] = f"✅ {label}（{sec:.1f}s）"
+                    _edit_progress(force=True)
+            elif event_type == "first_token":
+                progress_lines.append("💬 开始生成回复…")
+                _edit_progress(force=True)
+
+        try:
+            with lock:
+                reply = _streamed_turn(sess, user_text, on_progress)
+            html_reply = _md_to_tg_html(reply) if reply else "(已完成)"
+            # 删除进度消息，发送最终回复（避免长留闪烁信息）
+            if progress_msg is not None:
+                try:
+                    bot.delete_message(chat_id, progress_msg.message_id)
+                except Exception:
+                    pass
+            _send_chunks(chat_id, html_reply, parse_mode="HTML")
+        except Exception as e:
+            try:
+                if progress_msg is not None:
+                    bot.delete_message(chat_id, progress_msg.message_id)
+            except Exception:
+                pass
+            bot.send_message(chat_id, f"❌ 出错了：{e}")
 
     threading.Thread(target=run, daemon=True).start()
 
@@ -606,6 +1014,27 @@ def send_reminder_via_telegram(title: str, subtitle: str, body: str) -> None:
 
 # ── 入口 ──────────────────────────────────────────────────────────────────────
 
+import time as _time
+
+
+def _wait_for_network(max_wait: int = 120, interval: int = 5) -> "telebot.types.User":
+    """等待网络就绪后获取 bot 信息，开机时 DNS 可能尚未就绪，故加重试。"""
+    deadline = _time.monotonic() + max_wait
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return bot.get_me()
+        except Exception as e:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                print(f"❌ 网络等待超时（{max_wait}s），最后一次错误：{e}")
+                raise
+            wait = min(interval, remaining)
+            print(f"[WARN] 第 {attempt} 次连接失败（网络未就绪？），{wait:.0f}s 后重试：{e}")
+            _time.sleep(wait)
+
+
 if __name__ == "__main__":
     if "--test" in sys.argv:
         me = bot.get_me()
@@ -613,7 +1042,7 @@ if __name__ == "__main__":
         print(f"   白名单：{ALLOWED_IDS or '(未设置，任何人发消息都会看到提示)'}")
         sys.exit(0)
 
-    me = bot.get_me()
+    me = _wait_for_network()
     print(f"✅ @{me.username} 已启动")
     print(f"   白名单：{ALLOWED_IDS or '(未设置)'}")
 
