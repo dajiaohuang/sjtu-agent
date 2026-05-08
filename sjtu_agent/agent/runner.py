@@ -24,6 +24,18 @@ from sjtu_agent.terminal_ui import print_markdown_message, print_rule
 from sjtu_agent.agent.prompts import _TOOL_LABELS
 
 
+def _get_tools():
+    """Lazy import TOOLS，避免 runner ↔ tools 循环依赖。"""
+    from sjtu_agent.agent.tools import TOOLS
+    return TOOLS
+
+
+def _get_run_tool():
+    """Lazy import run_tool，避免循环依赖。"""
+    from sjtu_agent.agent.tools import run_tool
+    return run_tool
+
+
 def _ansi_supported() -> bool:
     """
     检测当前终端是否值得开启 \r 覆盖式 Spinner 动画。
@@ -129,7 +141,7 @@ def _make_client(cfg: dict):
 def _anthropic_tools() -> list:
     """将 OpenAI 工具格式转换为 Anthropic 格式。"""
     result = []
-    for t in TOOLS:
+    for t in _get_tools():
         fn = t["function"]
         result.append({
             "name": fn["name"],
@@ -271,7 +283,7 @@ def _run_one_turn_openai(client: OpenAI, model: str, messages: list) -> None:
         spinner.start("等待响应…")
         try:
             stream = client.chat.completions.create(
-                model=model, messages=messages, tools=TOOLS, tool_choice="auto",
+                model=model, messages=messages, tools=_get_tools(), tool_choice="auto",
                 timeout=180, stream=True,
             )
         except Exception as e:
@@ -327,7 +339,7 @@ def _run_one_turn_openai(client: OpenAI, model: str, messages: list) -> None:
             fn_args = json.loads(tc.function.arguments or "{}")
             if fn_name not in ("check_setup",):
                 spinner.start(_TOOL_LABELS.get(fn_name, fn_name) + "…")
-            result = run_tool(fn_name, fn_args)
+            result = _get_run_tool()(fn_name, fn_args)
             if fn_name not in ("check_setup",):
                 spinner.stop()
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
@@ -525,7 +537,7 @@ def _run_one_turn_anthropic(client: Anthropic, model: str, messages: list) -> No
             fn_args = b["input"] if isinstance(b["input"], dict) else {}
             if fn_name not in ("check_setup",):
                 spinner.start(_TOOL_LABELS.get(fn_name, fn_name) + "…")
-            result = run_tool(fn_name, fn_args)
+            result = _get_run_tool()(fn_name, fn_args)
             if fn_name not in ("check_setup",):
                 spinner.stop()
             tool_results.append({"type": "tool_result", "tool_use_id": b["id"], "content": result})
