@@ -523,13 +523,100 @@ def _format_reminders_for_telegram(raw_json: str) -> str:
 
 # ── Markdown → Telegram HTML 转换 ────────────────────────────────────────────
 
+def _latex_to_unicode(text: str) -> str:
+    """
+    将 LaTeX 数学公式转换为可读的 Unicode 文本。
+    处理行内公式 \(...\) 和块级公式 \[...\] 及 $$...$$。
+    """
+    import re as _re
+
+    _SYMBOLS = [
+        # 分数优先（嵌套时需多次迭代）
+        (r"\\frac\{([^{}]+)\}\{([^{}]+)\}", r"(\1)/(\2)"),
+        # 希腊字母
+        (r"\\omega", "ω"), (r"\\alpha", "α"), (r"\\beta", "β"), (r"\\gamma", "γ"),
+        (r"\\delta", "δ"), (r"\\epsilon", "ε"), (r"\\theta", "θ"), (r"\\lambda", "λ"),
+        (r"\\mu", "μ"), (r"\\pi", "π"), (r"\\sigma", "σ"), (r"\\tau", "τ"),
+        (r"\\phi", "φ"), (r"\\psi", "ψ"), (r"\\rho", "ρ"), (r"\\eta", "η"),
+        (r"\\Omega", "Ω"), (r"\\Delta", "Δ"), (r"\\Sigma", "Σ"), (r"\\Pi", "Π"),
+        (r"\\Lambda", "Λ"), (r"\\Phi", "Φ"), (r"\\Psi", "Ψ"), (r"\\Gamma", "Γ"),
+        # 运算符和关系
+        (r"\\times", "×"), (r"\\cdot", "·"), (r"\\div", "÷"),
+        (r"\\leq", "≤"), (r"\\geq", "≥"), (r"\\neq", "≠"), (r"\\approx", "≈"),
+        (r"\\pm", "±"), (r"\\mp", "∓"), (r"\\infty", "∞"),
+        (r"\\Rightarrow", "⇒"), (r"\\rightarrow", "→"), (r"\\leftarrow", "←"),
+        (r"\\Leftrightarrow", "⟺"), (r"\\leftrightarrow", "↔"),
+        (r"\\to", "→"), (r"\\gets", "←"),
+        (r"\\partial", "∂"), (r"\\nabla", "∇"), (r"\\int", "∫"), (r"\\sum", "Σ"),
+        (r"\\prod", "∏"),
+        (r"\\sqrt\{([^{}]+)\}", r"√(\1)"),
+        (r"\\sqrt", "√"),
+        # 上下标
+        (r"\^2", "²"), (r"\^3", "³"), (r"\^n", "ⁿ"), (r"\^T", "ᵀ"),
+        (r"_\{([^{}]+)\}", r"_\1"),
+        (r"_0", "₀"), (r"_1", "₁"), (r"_2", "₂"), (r"_3", "₃"),
+        (r"_n", "ₙ"), (r"_i", "ᵢ"), (r"_m", "ₘ"),
+        # 其他
+        (r"\\boxed\{([^{}]+)\}", r"【\1】"),
+        (r"\\left", ""), (r"\\right", ""),
+        (r"\\quad", "  "), (r"\\,", " "), (r"\\;", " "),
+        (r"\\!", ""), (r"\\ ", " "),
+        (r"\\text\{([^{}]+)\}", r"\1"),
+        (r"\\mathrm\{([^{}]+)\}", r"\1"),
+        (r"\\mathbf\{([^{}]+)\}", r"\1"),
+        (r"\\[a-zA-Z]+", ""),
+        (r"[{}]", ""),
+    ]
+
+    def _convert(expr: str) -> str:
+        s = expr
+        # 多次迭代处理嵌套（如 \frac{\sqrt{k}}{M}）
+        for _ in range(5):
+            prev = s
+            for pattern, repl in _SYMBOLS:
+                s = _re.sub(pattern, repl, s)
+            if s == prev:
+                break
+        return s.strip()
+
+    # 块级公式 \[...\] → 独立行
+    text = _re.sub(
+        r"\\\[(.+?)\\\]",
+        lambda m: "\n" + _convert(m.group(1)) + "\n",
+        text, flags=_re.DOTALL,
+    )
+    # 块级公式 $$...$$
+    text = _re.sub(
+        r"\$\$(.+?)\$\$",
+        lambda m: "\n" + _convert(m.group(1)) + "\n",
+        text, flags=_re.DOTALL,
+    )
+    # 行内公式 \(...\)
+    text = _re.sub(
+        r"\\\((.+?)\\\)",
+        lambda m: _convert(m.group(1)),
+        text, flags=_re.DOTALL,
+    )
+    # 行内公式 $...$（单个 $，排除 $$）
+    text = _re.sub(
+        r"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)",
+        lambda m: _convert(m.group(1)),
+        text,
+    )
+    return text
+
+
 def _md_to_tg_html(text: str) -> str:
     """
     将 agent 输出的 Markdown 文本转换为 Telegram 支持的 HTML 格式。
     Telegram HTML 只支持：<b> <i> <u> <s> <code> <pre> <a>
+    LaTeX 公式先转换为 Unicode 可读形式。
     """
     import html as _html
     import re as _re
+
+    # 先把 LaTeX 公式转成 Unicode
+    text = _latex_to_unicode(text)
 
     # 1. 先转义 HTML 特殊字符（避免内容中的 < > & 被解析为标签）
     #    但要跳过已有的 HTML 标签（如日报里的 <b>）
