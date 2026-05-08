@@ -121,3 +121,67 @@ class NewsAggregator:
                     print(f"[news] Telegram 推送异常 uid={uid}: {e}", flush=True)
                     success = False
         return success
+
+    def send_via_wechat(self, md_digest: str) -> bool:
+        """通过微信 ilink Bot 推送日报（纯文本/Markdown）。"""
+        from sjtu_agent import paths as _paths
+        from sjtu_agent.paths import read_json_safe
+        import sys, os
+
+        cfg = read_json_safe(_paths.CONFIG_PATH, default={})
+        token    = cfg.get("wechat_bot_token", "")
+        to_user  = cfg.get("wechat_to_user_id", "")
+        ctx_tok  = cfg.get("wechat_context_token", "")
+        if not token or not to_user or not ctx_tok:
+            print("[news] 微信未配置（需要 wechat_bot_token / wechat_to_user_id / wechat_context_token），跳过推送", flush=True)
+            return False
+
+        # 复用 wechat_bot.py 里的 ILinkClient
+        root = _paths.DATA_DIR.parent  # repo root
+        sys.path.insert(0, str(root))
+        try:
+            from wechat_bot import ILinkClient
+        except ImportError:
+            # fallback: 直接用 httpx 发
+            try:
+                import httpx, json, base64, random, uuid
+                headers = {
+                    "Content-Type": "application/json",
+                    "AuthorizationType": "ilink_bot_token",
+                    "Authorization": f"Bearer {token}",
+                    "X-WECHAT-UIN": base64.b64encode(str(random.randint(0, 0xFFFFFFFF)).encode()).decode(),
+                }
+                body = {
+                    "base_info": {"channel_version": "1.0.3"},
+                    "msg": {
+                        "from_user_id": "",
+                        "to_user_id": to_user,
+                        "client_id": f"bot-{uuid.uuid4().hex[:12]}",
+                        "message_type": 2,
+                        "message_state": 2,
+                        "context_token": ctx_tok,
+                        "item_list": [{"type": 1, "text_item": {"text": md_digest[:4000]}}],
+                    },
+                }
+                raw = json.dumps(body, ensure_ascii=False).encode()
+                headers["Content-Length"] = str(len(raw))
+                r = httpx.post("https://ilinkai.weixin.qq.com/ilink/bot/sendmessage",
+                               content=raw, headers=headers, timeout=35)
+                return r.status_code == 200
+            except Exception as e:
+                print(f"[news] 微信推送异常（fallback）: {e}", flush=True)
+                return False
+
+        client = ILinkClient(token)
+        # 微信消息无硬性长度限制，但分块更稳妥（每块 2000 字）
+        text = md_digest
+        success = True
+        while text:
+            chunk = text[:2000]
+            text  = text[2000:]
+            try:
+                client.send(chunk, to_user_id=to_user, context_token=ctx_tok)
+            except Exception as e:
+                print(f"[news] 微信推送异常: {e}", flush=True)
+                success = False
+        return success

@@ -66,6 +66,12 @@ def main():
             print("[news] ✅ Telegram 推送成功", flush=True)
         else:
             print("[news] ⚠ Telegram 推送失败或未配置", flush=True)
+
+        ok_wx = aggregator.send_via_wechat(md_digest)
+        if ok_wx:
+            print("[news] ✅ 微信推送成功", flush=True)
+        else:
+            print("[news] ⚠ 微信推送失败或未配置", flush=True)
     else:
         print("[news] --dry-run 模式，跳过推送", flush=True)
 
