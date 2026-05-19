@@ -193,6 +193,15 @@ class ConfigStore:
     def wechat_bot_token(self) -> str:
         return self.get("wechat_bot_token", "")
 
+    # ── Feishu ─────────────────────────────────────────────────────────
+    @property
+    def feishu_app_id(self) -> str:
+        return self.get("feishu_app_id", "")
+
+    @property
+    def feishu_app_secret(self) -> str:
+        return self.get("feishu_app_secret", "")
+
     # ── 水源 ────────────────────────────────────────────────────────────
     @property
     def shuiyuan_user_api_key(self) -> str:

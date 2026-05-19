@@ -709,6 +709,33 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "setup_feishu",
+            "description": (
+                "配置飞书 Bot 凭据（App ID 和 App Secret）。"
+                "用户在 https://open.feishu.cn/app 创建企业自建应用，开启 Bot 能力、"
+                "添加 im:message 权限、订阅 im.message.receive_v1 事件（WebSocket 模式）后，"
+                "从「凭证与基础信息」页面获取 App ID 和 App Secret。"
+                "用户说「接入飞书」「配置飞书」「飞书 bot」「飞书推送」时调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "feishu_app_id": {
+                        "type": "string",
+                        "description": "飞书应用的 App ID（cli_ 开头）",
+                    },
+                    "feishu_app_secret": {
+                        "type": "string",
+                        "description": "飞书应用的 App Secret",
+                    },
+                },
+                "required": ["feishu_app_id", "feishu_app_secret"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "fetch_url",
             "description": (
                 "抓取网页内容并提取纯文本。"
@@ -3491,6 +3518,67 @@ def tool_setup_telegram(telegram_token: str, allowed_ids: list | None = None) ->
     return result
 
 
+def tool_setup_feishu(feishu_app_id: str = "", feishu_app_secret: str = "") -> dict:
+    """
+    将飞书 App ID 和 App Secret 保存到 config.json 并验证凭证有效性。
+    用户在 https://open.feishu.cn/app 创建企业自建应用后可获取这些凭据。
+    """
+    cfg: dict = {}
+    if CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    if feishu_app_id:
+        cfg["feishu_app_id"] = feishu_app_id.strip()
+    if feishu_app_secret:
+        cfg["feishu_app_secret"] = feishu_app_secret.strip()
+
+    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 验证凭据有效性（获取 tenant_access_token）
+    valid: bool | None = None
+    app_info: dict = {}
+    try:
+        import requests as _req
+        resp = _req.post(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            json={
+                "app_id": cfg.get("feishu_app_id", ""),
+                "app_secret": cfg.get("feishu_app_secret", ""),
+            },
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            body = resp.json()
+            if body.get("code") == 0:
+                valid = True
+                app_info["tenant_access_token_ok"] = True
+            else:
+                valid = False
+                app_info["error"] = body.get("msg", f"code={body.get('code')}")
+        else:
+            valid = False
+            app_info["error"] = f"HTTP {resp.status_code}"
+    except Exception:
+        valid = None  # 网络不通，跳过验证
+
+    result: dict = {
+        "saved": True,
+        "valid": valid,
+        "next_steps": [
+            "运行 `sjtu-agent feishu-bot` 启动 Bot（WebSocket 长连接模式）。",
+            "在飞书搜索你的应用名称，进入对话即可使用。",
+            "需要后台常驻运行 `sjtu-agent install-daemons` 安装守护进程。",
+            "如尚未创建飞书应用，前往 https://open.feishu.cn/app 创建企业自建应用。",
+        ],
+    }
+    if app_info:
+        result["app_info"] = app_info
+    return result
+
+
 def tool_fetch_url(url: str) -> dict:
     """
     抓取网页内容并提取纯文本。
@@ -4010,6 +4098,7 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "get_user_profile":         r = tool_get_user_profile()
         elif name == "setup_telegram":           r = tool_setup_telegram(**args)
         elif name == "setup_wechat":             r = tool_setup_wechat()
+        elif name == "setup_feishu":           r = tool_setup_feishu(**args)
         else:                               r = {"error": f"未知工具: {name}"}
     except Exception as e:
         r = {"error": str(e)}
