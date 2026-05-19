@@ -134,6 +134,8 @@ def load_agent_config() -> dict:
     if AGENT_CONFIG_PATH.exists():
         try:
             cfg = json.loads(AGENT_CONFIG_PATH.read_text())
+            if str(cfg.get("provider", "")).lower() == "custom":
+                return cfg if cfg.get("api_key") and cfg.get("model") else {}
             if cfg.get("api_key") and cfg.get("model"):
                 return cfg
         except (json.JSONDecodeError, OSError):
@@ -159,6 +161,7 @@ def _test_llm_connection_simple(base_url: str, api_key: str, model: str) -> tupl
     if not api_key.strip():
         return False, "API Key 为空"
     try:
+        from openai import OpenAI
         client = OpenAI(api_key=api_key.strip(), base_url=_url or None)
         client.chat.completions.create(
             model=model.strip(),

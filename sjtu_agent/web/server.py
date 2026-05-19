@@ -152,9 +152,8 @@ def _get_status() -> dict:
     # 判断 LLM API 是否配置
     has_zhiyuan = bool(env.get("ZHIYUAN_API_KEY"))
     has_openai = bool(env.get("OPENAI_API_KEY") or agent_cfg.get("api_key"))
-    has_deepseek = bool(env.get("DEEPSEEK_API_KEY"))
     has_anthropic = bool(env.get("ANTHROPIC_API_KEY"))
-    has_api = has_zhiyuan or has_openai or has_deepseek or has_anthropic
+    has_api = has_zhiyuan or has_openai or has_anthropic
 
     # Canvas
     has_canvas = bool(cfg.get("canvas_token") and not cfg.get("canvas_token", "").startswith("YOUR_"))
@@ -186,7 +185,6 @@ def _get_status() -> dict:
         "wechat": has_wechat,
         "zhiyuan": has_zhiyuan,
         "openai": has_openai,
-        "deepseek": has_deepseek,
         "anthropic": has_anthropic,
     }
 
@@ -197,16 +195,19 @@ def _get_config_values() -> dict:
     cfg = _read_config()
     agent_cfg = _read_agent_config()
 
-    # 推断当前使用的 provider
-    provider = "custom"
-    if env.get("ZHIYUAN_API_KEY"):
+    # agent_config.json 是用户在 Web UI 中显式保存的配置，应优先回显。
+    saved_provider = str(agent_cfg.get("provider", "") or "").strip().lower()
+    provider = saved_provider if saved_provider in PRESETS else ""
+    if not provider and agent_cfg.get("api_key"):
+        provider = "custom"
+    elif not provider and env.get("ZHIYUAN_API_KEY"):
         provider = "zhiyuan"
-    elif env.get("DEEPSEEK_API_KEY"):
-        provider = "deepseek"
-    elif env.get("ANTHROPIC_API_KEY"):
+    elif not provider and env.get("ANTHROPIC_API_KEY"):
         provider = "anthropic"
-    elif env.get("OPENAI_API_KEY") or agent_cfg.get("api_key"):
+    elif not provider and env.get("OPENAI_API_KEY"):
         provider = "openai"
+    elif not provider:
+        provider = "custom"
 
     # 从 agent_config.json 读 base_url / model
     base_url = agent_cfg.get("base_url", "")
@@ -219,13 +220,14 @@ def _get_config_values() -> dict:
         model = PRESETS[provider]["model"]
 
     # API key（脱敏）
-    raw_key = (
-        env.get("ZHIYUAN_API_KEY")
-        or env.get("DEEPSEEK_API_KEY")
-        or env.get("ANTHROPIC_API_KEY")
-        or env.get("OPENAI_API_KEY")
-        or agent_cfg.get("api_key", "")
-    )
+    raw_key = agent_cfg.get("api_key", "")
+    if not raw_key:
+        if provider == "zhiyuan":
+            raw_key = env.get("ZHIYUAN_API_KEY", "")
+        elif provider == "anthropic":
+            raw_key = env.get("ANTHROPIC_API_KEY", "")
+        elif provider == "openai":
+            raw_key = env.get("OPENAI_API_KEY", "")
 
     return {
         "provider": provider,
@@ -259,14 +261,16 @@ def _get_chat_client():
     - claude 模型 → Anthropic SDK（带 claude-cli UA，兼容中转代理）
     - 其他模型   → OpenAI SDK
     """
-    env = _read_env()
     agent_cfg = _read_agent_config()
+    env = _read_env()
+    provider = str(agent_cfg.get("provider", "") or "").strip().lower()
     base_url = agent_cfg.get("base_url") or None
     model = agent_cfg.get("model", "deepseek-chat")
     ua = agent_cfg.get("user_agent", "claude-cli/1.0.57")
+    api_key = agent_cfg.get("api_key", "")
 
     if model.startswith("claude"):
-        api_key = env.get("ANTHROPIC_API_KEY") or agent_cfg.get("api_key", "")
+        api_key = api_key or env.get("ANTHROPIC_API_KEY", "")
         from anthropic import Anthropic
         client = Anthropic(
             api_key=api_key,
@@ -276,12 +280,19 @@ def _get_chat_client():
         )
         return client, model, "anthropic"
 
-    api_key = (
-        env.get("ZHIYUAN_API_KEY")
-        or env.get("DEEPSEEK_API_KEY")
-        or env.get("OPENAI_API_KEY")
-        or agent_cfg.get("api_key", "")
-    )
+    if not api_key:
+        if provider == "zhiyuan":
+            api_key = env.get("ZHIYUAN_API_KEY", "")
+        elif provider == "openai":
+            api_key = env.get("OPENAI_API_KEY", "")
+        elif provider == "custom":
+            api_key = ""
+        else:
+            api_key = (
+                env.get("ZHIYUAN_API_KEY")
+                or env.get("OPENAI_API_KEY")
+                or ""
+            )
 
     if model.startswith("claude"):
         from anthropic import Anthropic
@@ -759,23 +770,24 @@ class _Handler(BaseHTTPRequestHandler):
             env_key = preset["env_key"]
             if provider == "zhiyuan":
                 env_updates["ZHIYUAN_API_KEY"] = api_key
-            elif provider == "deepseek":
-                env_updates["DEEPSEEK_API_KEY"] = api_key
             elif provider == "anthropic":
                 env_updates["ANTHROPIC_API_KEY"] = api_key
-            else:
+            elif provider == "openai":
                 env_updates[env_key] = api_key
         if env_updates:
             _write_env(env_updates)
 
         # 写 agent_config.json
         agent_cfg = _read_agent_config()
+        agent_cfg["provider"] = provider if provider in PRESETS else "custom"
         if base_url:
             agent_cfg["base_url"] = base_url
         if model:
             agent_cfg["model"] = model
-        if api_key and provider not in ("zhiyuan", "deepseek"):
+        if api_key and provider in ("custom", "openai", "anthropic"):
             agent_cfg["api_key"] = api_key
+        elif provider == "zhiyuan":
+            agent_cfg.pop("api_key", None)
         _write_agent_config(agent_cfg)
 
     def _save_credentials(self, body: dict) -> None:
