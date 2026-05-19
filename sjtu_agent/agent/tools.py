@@ -2076,6 +2076,11 @@ def tool_login_platform(platform: str) -> dict:
         return {"success": False, "error": "config.json 不存在，请先保存凭证"}
     cfg = json.loads(CONFIG_PATH.read_text())
     try:
+        import login as _login_module
+        _ManualLoginRequired = getattr(_login_module, "ManualLoginRequired", None)
+    except Exception:
+        _ManualLoginRequired = None
+    try:
         if platform == "aihaoke":
             print("  [Playwright 自动登录 aihaoke，浏览器窗口会短暂出现…]", flush=True)
             ok, error = dc.refresh_aihaoke_cookies(cfg)
@@ -2094,6 +2099,15 @@ def tool_login_platform(platform: str) -> dict:
         else:
             return {"success": False, "error": f"未知平台: {platform}"}
     except Exception as e:
+        if _ManualLoginRequired is not None and isinstance(e, _ManualLoginRequired):
+            return {
+                "success": False,
+                "manual_login_required": True,
+                "stop_retrying": True,
+                "platform": platform,
+                "error": str(e),
+                "hint": "请用户自己在浏览器里手动登录一次该平台（账号密码 + 选择验证方式 + OTP），完成后再让我重试。不要再次调用 login_platform。",
+            }
         return {"success": False, "error": str(e)}
 
 

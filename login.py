@@ -160,6 +160,27 @@ def _solve_captcha(img_bytes: bytes) -> str:
 
 # ── jAccount 通用登录 ──────────────────────────────────────────────────────────
 
+
+class ManualLoginRequired(Exception):
+    """jAccount 走到了脚本无法自动完成的二次验证分支（如境外登录的「交我办/邮箱/手机」三选一），
+    需要用户在浏览器里手动登录一次。"""
+    pass
+
+
+def _detect_otp_method_picker(page: Page) -> bool:
+    """检测当前 jAccount 页面是否是「二次验证方式三选一」选择页（境外/异地登录会触发）。
+    特征：页面同时出现「交我办」 + (「邮箱」/「邮件」) + (「手机」/「短信」) 等多个 OTP 入口。"""
+    try:
+        text = (page.inner_text("body", timeout=800) or "")
+    except Exception:
+        return False
+    if "交我办" not in text:
+        return False
+    has_mail = ("邮箱" in text) or ("邮件" in text)
+    has_phone = ("手机" in text) or ("短信" in text)
+    return has_mail or has_phone
+
+
 def _fill_jaccount(page: Page, username: str, password: str) -> bool:
     """
     在已跳转到 jAccount jalogin 页的 page 上完成登录。
@@ -196,6 +217,16 @@ def _fill_jaccount(page: Page, username: str, password: str) -> bool:
 
         if "jaccount.sjtu.edu.cn" not in page.url:
             return True
+
+        # ── 检测「二次验证方式三选一」（境外/异地登录）─────────────────
+        # 这是 jAccount 出现「交我办 / 邮箱 / 手机」三选一的页面，脚本
+        # 没法替用户在交我办里点确认，也没法收用户手机/邮箱里的 OTP，
+        # 必须停下来让用户手动完成。
+        if _detect_otp_method_picker(page):
+            raise ManualLoginRequired(
+                "jAccount 触发了境外/异地登录的二次验证（交我办 / 邮箱 / 手机 三选一），"
+                "脚本无法自动完成。请在浏览器里手动登录一次该平台后再试。"
+            )
 
         # ── 检测短信/二步验证码输入框 ────────────────────────────────────
         _sms_selectors = [
@@ -342,6 +373,8 @@ def login_aihaoke(ctx: BrowserContext, username: str, password: str) -> bool:
         page.wait_for_load_state("networkidle", timeout=10_000)
         print(f"  ✓ 登录成功：{page.url}")
         return True
+    except ManualLoginRequired:
+        raise
     except Exception as e:
         print(f"  ✗ 失败：{e}")
         return False
@@ -364,6 +397,8 @@ def login_phycai(ctx: BrowserContext, username: str, password: str) -> bool:
         if ok:
             print(f"  ✓ 登录成功：{page.url}")
         return ok
+    except ManualLoginRequired:
+        raise
     except Exception as e:
         print(f"  ✗ 失败：{e}")
         return False
