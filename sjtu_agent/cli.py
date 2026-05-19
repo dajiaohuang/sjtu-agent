@@ -358,9 +358,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args, unknown = parser.parse_known_args(argv)
     if not getattr(args, "command", None):
         return _cmd_chat(argparse.Namespace(script_args=[]))
+    if unknown:
+        if hasattr(args, "script_args"):
+            args.script_args = list(getattr(args, "script_args", [])) + unknown
+        else:
+            parser.parse_args(argv)
     return args.func(args)
 
 
