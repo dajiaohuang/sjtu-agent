@@ -81,6 +81,8 @@ Base URL 默认为 `https://models.sjtu.edu.cn/api/v1`，模型默认 `deepseek-
 
 前往 [https://zhiyuan.sjtu.edu.cn](https://zhiyuan.sjtu.edu.cn)，使用 jAccount 登录后在「API 管理」中创建 Key。
 
+如果使用 DeepSeek 官方或其他 OpenAI 兼容接口，在 Web 配置页选择「自定义」，填入对应的 API Key、Base URL 和模型名即可。Base URL 只填服务根地址，不要填到 `/chat/completions`。
+
 ---
 
 ## 常用命令
