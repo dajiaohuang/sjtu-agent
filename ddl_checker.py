@@ -42,17 +42,6 @@ CST = timezone(timedelta(hours=8))
 NOW = datetime.now(CST)
 WEEKDAY_ZH = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
-# 中国大学MOOC课程列表（可在此处增减）
-ICOURSE_COURSES = [
-    {
-        "name": "大学物理",
-        "learn_url": "https://www.icourse163.org/learn/SJTU-1449794172?tid=1476751568",
-        "term_id": 1476751568,
-        "course_id": "SJTU-1449794172",
-    },
-]
-
-
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
@@ -993,122 +982,95 @@ def _icourse_login_with_creds(cfg: dict) -> dict | None:
         return None
 
 
-def _discover_icourse_term_id(cookies: dict, course_id: str) -> int | None:
-    """
-    用 Playwright 访问课程页，从 URL 或页面数据中提取当前 term_id。
-    course_id 格式如 'SJTU-1449794172'
-    """
-    if not HAS_PLAYWRIGHT:
-        return None
-    
+def _icourse_warm_up(session: requests.Session) -> bool:
+    """访问 icourse163 首页让服务器把 STUDY_INFO/STUDY_SESS/STUDY_PERSIST 设到
+    .icourse163.org 域名上。
+    必须在调任何受鉴权保护的 RPC 之前调用——否则 requests cookie jar 不会发送
+    config.json 里手动加载的 STUDY_* cookies（值含引号/特殊字符），导致服务端
+    认为未登录、RPC 返回 result=null。
+    返回是否登录态有效。"""
     try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            ctx = browser.new_context()
-            ctx.add_cookies([
-                {"name": k, "value": v, "domain": ".icourse163.org", "path": "/"}
-                for k, v in cookies.items()
-            ])
-            page = ctx.new_page()
-            
-            # 访问课程主页，会自动跳转到当前学期
-            page.goto(f"https://www.icourse163.org/course/{course_id}", 
-                     wait_until="domcontentloaded", timeout=20000)
-            page.wait_for_timeout(2000)
-            
-            # 从 URL 提取 tid 参数
-            final_url = page.url
-            browser.close()
-            
-            import re
-            m = re.search(r'[?&]tid=(\d+)', final_url)
-            if m:
-                return int(m.group(1))
-            
-            # 如果 URL 没有，尝试从页面 JS 变量提取
-            # （这里可以扩展更多提取逻辑）
-            return None
-    except Exception as e:
-        print(f"[icourse163] 发现 term_id 失败：{e}")
-        return None
+        session.get("https://www.icourse163.org/", timeout=20)
+    except requests.RequestException:
+        return False
+    # warm-up 后服务端会下发 STUDY_INFO 到 .icourse163.org；只有真登录时才会下发
+    for c in session.cookies:
+        if c.name == "STUDY_INFO" and ".icourse163.org" in (c.domain or ""):
+            return True
+    return False
 
 
-def fetch_icourse(cfg: dict) -> list[dict]:
-    """获取中国大学MOOC得分为0且未过期的测试。优先用缓存的 cookies + term_id，失效时才重新登录。"""
-    cookies = cfg.get("icourse_cookies", {})
-    
-    # 快速验证 cookies 是否有效（纯 requests，< 1s）
-    if not cookies or not cookies.get("NTESSTUDYSI"):
-        print("[icourse163] cookies 未配置，正在登录…")
-        new_cookies = _icourse_login_with_creds(cfg)
-        if not new_cookies:
-            print("[icourse163] ⚠ 登录失败，跳过")
-            return []
-        cookies = new_cookies
+def _icourse_get_my_courses(session: requests.Session) -> list[dict] | None:
+    """通过 getMyLearnedCoursePanelList.rpc 获取用户当前所有已注册课程及当前学期。
+    返回 [{name, course_id, term_id, school_short_name}, ...]；
+    鉴权/网络失败返回 None；用户未注册任何课程返回 []。"""
+    url = "https://www.icourse163.org/web/j/learnerCourseRpcBean.getMyLearnedCoursePanelList.rpc"
+    csrf_key = session.cookies.get("NTESSTUDYSI", "")
+    out: list[dict] = []
 
-    session = make_session(cookies, referer="https://www.icourse163.org/")
-    results: list[dict] = []
-    
-    # 从 config 读取缓存的 term_id（避免每次都 Playwright）
-    cached_terms = cfg.get("icourse_term_ids", {})
-    
-    for course in ICOURSE_COURSES:
-        course_id = course.get("course_id", "")
-        if not course_id:
-            results.extend(_fetch_icourse_one(session, course, cookies))
-            continue
-        
-        # 优先用缓存的 term_id
-        cached_tid = cached_terms.get(course_id)
-        if cached_tid:
-            course = {**course, "term_id": cached_tid}
-            # 先试试缓存的 term_id 能否用
-            rpc_result = _icourse_rpc(session, cached_tid)
-            if rpc_result is not None:
-                results.extend(_parse_icourse_rpc(rpc_result, course["name"]))
-                continue
-            print(f"[icourse163] {course['name']} 缓存的 term_id 已失效")
-        
-        # 缓存失效或不存在，动态发现
-        print(f"[icourse163] 正在发现 {course['name']} 的当前学期…")
-        term_id = _discover_icourse_term_id(cookies, course_id)
-        if term_id:
-            print(f"[icourse163] ✓ 当前 term_id = {term_id}")
-            # 缓存到 config
-            cached_terms[course_id] = term_id
-            cfg["icourse_term_ids"] = cached_terms
-            CONFIG_PATH.write_text(
-                json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            course = {**course, "term_id": term_id}
-        else:
-            print(f"[icourse163] ⚠ 无法发现当前学期，使用配置的 term_id")
-        
-        results.extend(_fetch_icourse_one(session, course, cookies))
-    return results
+    # courseType: 1=MOOC, 2=SPOC。type=30 是"全部"——和官网"我的课程"行为一致。
+    for course_type in ("1", "2"):
+        page_index = 1
+        while page_index < 20:  # 防御性上限
+            try:
+                r = session.post(
+                    url,
+                    params={"csrfKey": csrf_key},
+                    data={"type": "30", "p": str(page_index), "psize": "20", "courseType": course_type},
+                    timeout=15,
+                )
+            except requests.RequestException as e:
+                print(f"[icourse163] 拉取课程列表网络错误：{e}")
+                return None
+            if r.status_code != 200:
+                return None
+            try:
+                data = r.json()
+            except json.JSONDecodeError:
+                return None
+            if data.get("code") != 0:
+                return None
+            result = data.get("result") or {}
+            items = result.get("result") or []
+            for c in items:
+                term = c.get("termPanel") or {}
+                term_id = term.get("id")
+                course_id = c.get("id")
+                if not term_id or not course_id:
+                    continue
+                school = c.get("schoolPanel") or {}
+                out.append({
+                    "name": c.get("name") or "未命名课程",
+                    "course_id": int(course_id),
+                    "term_id": int(term_id),
+                    "school_short_name": (school.get("shortName") or "").strip(),
+                })
+            pagination = result.get("pagination") or {}
+            total_pages = pagination.get("totlePageCount") or 1
+            if page_index >= total_pages or not items:
+                break
+            page_index += 1
+    return out
 
 
-def _fetch_icourse_one(session: requests.Session, course: dict, cookies: dict) -> list[dict]:
-    cname   = course["name"]
-    term_id = course["term_id"]
-
-    # 优先尝试 JSON RPC 接口（速度快、无需浏览器）
-    rpc_result = _icourse_rpc(session, term_id)
-    if rpc_result is not None:
-        return _parse_icourse_rpc(rpc_result, cname)
-
-    # 降级：用 Playwright 加载页面并拦截 RPC 响应（icourse163 是 SPA，HTML 无法直接解析）
-    print(f"  [icourse163] RPC 直连失败，切换 Playwright 模式…")
-    return _fetch_icourse_playwright(cookies, course)
-
-
-def _icourse_rpc(session: requests.Session, term_id: int) -> dict | None:
-    """尝试调用 icourse163 的 JSON RPC 接口获取课程结构。"""
+def _icourse_rpc(session: requests.Session, term_id: int,
+                 course_id: int = 0, school: str = "") -> dict | None:
+    """调用 courseBean.getLastLearnedMocTermDto.rpc 拿到完整课程结构（章节/quiz/exam）。
+    调用前必须先 _icourse_warm_up；Referer 必须指向具体 learn 页，否则部分账号会得到
+    result=null（疑似服务端 anti-bot 检查）。"""
     url = "https://www.icourse163.org/web/j/courseBean.getLastLearnedMocTermDto.rpc"
+    csrf_key = session.cookies.get("NTESSTUDYSI", "")
+    referer = (
+        f"https://www.icourse163.org/learn/{school}-{course_id}?tid={term_id}"
+        if school and course_id
+        else "https://www.icourse163.org/"
+    )
     try:
         r = session.post(
             url,
-            data={"csrfKey": session.cookies.get("NTESSTUDYSI", ""), "termId": str(term_id)},
+            params={"csrfKey": csrf_key},
+            data={"termId": str(term_id)},
+            headers={"Referer": referer},
             timeout=15,
         )
         if r.status_code == 200 and "application/json" in r.headers.get("Content-Type", ""):
@@ -1118,6 +1080,58 @@ def _icourse_rpc(session: requests.Session, term_id: int) -> dict | None:
     except (requests.RequestException, json.JSONDecodeError):
         pass
     return None
+
+
+def fetch_icourse(cfg: dict) -> list[dict]:
+    """获取中国大学MOOC各课程未完成的测试/考试。
+
+    流程：
+      1. 用 config.icourse_cookies 建 session 并 warm-up 首页
+      2. warm-up 成功（说明 cookies 有效）→ 调 panel list 拿用户所有课程 + 当前学期
+      3. warm-up 失败（cookies 过期）→ 用 MOOC_USERNAME/MOOC_PASSWORD 重登并重试
+      4. 对每门课用 termId 拉章节，解析 quiz/exam 的 deadline + 分数
+    """
+    cookies = cfg.get("icourse_cookies") or {}
+
+    session: requests.Session | None = None
+    if cookies.get("NTESSTUDYSI"):
+        session = make_session(cookies)
+        if not _icourse_warm_up(session):
+            session = None  # cookies 已失效
+
+    if session is None:
+        print("[icourse163] cookies 失效或未配置，正在登录…")
+        new_cookies = _icourse_login_with_creds(cfg)
+        if not new_cookies:
+            print("[icourse163] ⚠ 登录失败，跳过")
+            return []
+        cookies = new_cookies
+        session = make_session(cookies)
+        if not _icourse_warm_up(session):
+            print("[icourse163] ⚠ 登录成功但 warm-up 仍失败，跳过")
+            return []
+
+    courses = _icourse_get_my_courses(session)
+    if courses is None:
+        print("[icourse163] ⚠ 无法拉取课程列表，跳过")
+        return []
+    if not courses:
+        print("[icourse163] 用户未注册任何 MOOC/SPOC 课程")
+        return []
+
+    print(f"[icourse163] 已发现 {len(courses)} 门课程：{', '.join(c['name'] for c in courses)}")
+    results: list[dict] = []
+    for course in courses:
+        rpc_result = _icourse_rpc(
+            session, course["term_id"],
+            course_id=course["course_id"],
+            school=course["school_short_name"],
+        )
+        if rpc_result is None:
+            print(f"[icourse163] ⚠ {course['name']} 拉取章节失败 (term={course['term_id']})")
+            continue
+        results.extend(_parse_icourse_rpc(rpc_result, course["name"]))
+    return results
 
 
 def _parse_icourse_rpc(result: dict, cname: str) -> list[dict]:
@@ -1191,53 +1205,6 @@ def _parse_icourse_rpc(result: dict, cname: str) -> list[dict]:
         })
 
     return results
-
-
-def _fetch_icourse_playwright(cookies: dict, course: dict) -> list[dict]:
-    """Playwright fallback：加载课程页面并拦截 RPC 响应，适用于 RPC 直连失败的情况。"""
-    if not HAS_PLAYWRIGHT:
-        print(f"  [icourse163] ⚠ Playwright 不可用，跳过 {course['name']}")
-        return []
-
-    cname = course["name"]
-    pw_cookies = [
-        {"name": k, "value": v, "domain": ".icourse163.org", "path": "/"}
-        for k, v in cookies.items()
-    ]
-
-    captured: dict = {}
-
-    def _on_response(resp):
-        # 拦截任何包含课程结构数据的 RPC 响应
-        if captured or "MocTermDto" not in resp.url:
-            return
-        try:
-            body = resp.json()
-            if body.get("result"):
-                captured["result"] = body["result"]
-        except Exception:
-            pass
-
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        ctx = browser.new_context()
-        ctx.add_cookies(pw_cookies)
-        page = ctx.new_page()
-        page.on("response", _on_response)
-        try:
-            page.goto(course["learn_url"], wait_until="networkidle", timeout=30_000)
-            # networkidle 后再等一小段，确保异步 RPC 已发出
-            page.wait_for_timeout(2000)
-        except Exception as e:
-            print(f"  [icourse163] Playwright {cname} 页面加载失败：{e}")
-        finally:
-            browser.close()
-
-    if "result" in captured:
-        return _parse_icourse_rpc(captured["result"], cname)
-
-    print(f"  [icourse163] {cname} 未捕获到数据（请确认已登录 icourse163）")
-    return []
 
 
 # ── 输出格式化 ────────────────────────────────────────────────────────────────
