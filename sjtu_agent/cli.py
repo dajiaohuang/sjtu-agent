@@ -48,41 +48,133 @@ def _cmd_update(args: argparse.Namespace) -> int:
     if not pip.exists():
         pip = Path(sys.executable).parent / "pip3"
 
-    print(f"[sjtu-agent update] 当前版本：{__version__}")
-    print(f"[sjtu-agent update] 项目目录：{PROJECT_ROOT}")
+    print(f"sjtu-agent 更新工具")
+    print(f"  当前版本：{__version__}")
+    print(f"  项目目录：{PROJECT_ROOT}")
 
-    # ── 1. git pull ────────────────────────────────────────────────────────
+    # ── 0. 前置检查 ────────────────────────────────────────────────────────
+    git = shutil.which("git")
+    if not git:
+        print("[!] 未找到 git，无法更新代码。请安装 Git 后重试。")
+        return 1
+
+    is_git_repo = False
+    try:
+        r = subprocess.run(
+            [git, "rev-parse", "--is-inside-work-tree"],
+            cwd=str(PROJECT_ROOT), capture_output=True, timeout=5,
+        )
+        is_git_repo = r.returncode == 0
+    except Exception:
+        pass
+
+    if not is_git_repo:
+        print(f"[!] {PROJECT_ROOT} 不是 Git 仓库，无法自动更新。")
+        print("   请确认项目是通过 git clone 安装的。")
+        return 1
+
+    # ── 1. 显示待更新内容 ──────────────────────────────────────────────────
     if not args.skip_git:
-        git = shutil.which("git")
-        if not git:
-            print("[sjtu-agent update] ⚠️  未找到 git，跳过代码更新")
+        # 获取当前 HEAD 和远端 HEAD 的差异
+        local_hash = subprocess.run(
+            [git, "rev-parse", "HEAD"],
+            cwd=str(PROJECT_ROOT), capture_output=True, timeout=5,
+        ).stdout.decode().strip()
+
+        # 尝试获取远端最新
+        print("\n正在检查远端更新…")
+        fetch_result = subprocess.run(
+            [git, "fetch", "--quiet", "--no-tags", "origin"],
+            cwd=str(PROJECT_ROOT), capture_output=True, timeout=30,
+        )
+        if fetch_result.returncode != 0:
+            print("[!] 无法连接到远端仓库，请检查网络。")
+            if not args.upgrade_deps and not args.update_playwright:
+                return 1
         else:
-            print("[sjtu-agent update] 正在 git pull…")
-            result = subprocess.run(
-                [git, "pull", "--ff-only"],
+            # 确定远端分支
+            remote_ref = ""
+            for ref in ["@{u}", "origin/main", "origin/master"]:
+                r = subprocess.run(
+                    [git, "rev-parse", ref],
+                    cwd=str(PROJECT_ROOT), capture_output=True, timeout=5,
+                )
+                if r.returncode == 0:
+                    remote_ref = ref
+                    break
+
+            if remote_ref:
+                remote_hash = subprocess.run(
+                    [git, "rev-parse", remote_ref],
+                    cwd=str(PROJECT_ROOT), capture_output=True, timeout=5,
+                ).stdout.decode().strip()
+
+                if local_hash == remote_hash:
+                    print("[OK] 已是最新版本，无需更新。")
+                    if not args.upgrade_deps and not args.update_playwright:
+                        return 0
+                else:
+                    # 显示最近几个 commit
+                    behind = subprocess.run(
+                        [git, "rev-list", "--count", f"{local_hash}..{remote_hash}"],
+                        cwd=str(PROJECT_ROOT), capture_output=True, timeout=5,
+                    ).stdout.decode().strip()
+                    print(f"\n发现 {behind} 个新提交：")
+                    log_result = subprocess.run(
+                        [git, "log", "--oneline", f"{local_hash}..{remote_hash}", "-10"],
+                        cwd=str(PROJECT_ROOT), capture_output=True, timeout=5,
+                    )
+                    if log_result.returncode == 0:
+                        for line in log_result.stdout.decode().strip().split("\n"):
+                            if line:
+                                print(f"  • {line}")
+
+    # ── 2. git pull ────────────────────────────────────────────────────────
+    if not args.skip_git:
+        print("\n正在拉取最新代码…")
+        # 先尝试 fast-forward（最简单，无冲突）
+        result = subprocess.run(
+            [git, "pull", "--ff-only"],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            print("[OK] 代码已更新。")
+        else:
+            # fast-forward 失败 → 可能是本地有提交导致分叉，尝试 rebase
+            print("  (fast-forward 不可用，尝试 rebase…)")
+            rebase_result = subprocess.run(
+                [git, "pull", "--rebase"],
                 cwd=str(PROJECT_ROOT),
                 capture_output=False,
             )
-            if result.returncode != 0:
-                print("[sjtu-agent update] ⚠️  git pull 失败，请手动解决冲突后重试")
+            if rebase_result.returncode == 0:
+                print("[OK] 代码已更新（rebase 方式）。")
+            else:
+                print("[!] 自动更新失败，请手动处理：")
+                print(f"    cd {PROJECT_ROOT}")
+                print("    git status    # 查看当前状态")
+                print("    git log --oneline -5   # 查看本地提交")
+                print("    如有未推送的本地提交，可尝试: git pull --rebase")
+                print("    或放弃本地修改: git reset --hard origin/main")
                 return 1
 
-    # ── 2. pip install -e . ────────────────────────────────────────────────
-    print("[sjtu-agent update] 正在重新安装依赖…")
+    # ── 3. pip install -e . ────────────────────────────────────────────────
+    print("\n正在重新安装…")
     pip_cmd = [sys.executable, "-m", "pip", "install", "-e", str(PROJECT_ROOT), "--quiet"]
     if args.upgrade_deps:
         pip_cmd.append("--upgrade")
     result = subprocess.run(pip_cmd)
     if result.returncode != 0:
-        print("[sjtu-agent update] ⚠️  依赖安装失败")
+        print("[!] 依赖安装失败，请手动运行: pip install -e " + str(PROJECT_ROOT))
         return 1
 
-    # ── 3. 可选：更新 Playwright Chromium ─────────────────────────────────
+    # ── 4. 可选：更新 Playwright Chromium ─────────────────────────────────
     if args.update_playwright:
-        print("[sjtu-agent update] 正在更新 Playwright Chromium…")
+        print("正在更新 Playwright Chromium…")
         subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
 
-    # ── 3b. Windows 上写兜底 .pth 确保 editable install 路径不丢失 ────
+    # ── 5. Windows 上写兜底 .pth 确保 editable install 路径不丢失 ────
     if sys.platform == "win32":
         try:
             import site as _site
@@ -90,12 +182,11 @@ def _cmd_update(args: argparse.Namespace) -> int:
             if sp_dirs:
                 pth_path = Path(sp_dirs[0]) / "sjtu_agent_editable_path.pth"
                 pth_path.write_text(str(PROJECT_ROOT) + "\n", encoding="utf-8")
-                print(f"[sjtu-agent update] 已刷新 .pth 文件：{pth_path}")
+                print(f"已刷新 .pth 文件：{pth_path}")
         except Exception as _e:
-            print(f"[sjtu-agent update] （写 .pth 失败，非致命：{_e}）")
+            print(f"（写 .pth 失败，非致命：{_e}）")
 
-    # ── 4. 打印新版本 ────────────────────────────────────────────────────
-    # 重新导入以获取更新后的版本号
+    # ── 6. 打印新版本 ────────────────────────────────────────────────────
     try:
         import importlib
         import sjtu_agent as _pkg
@@ -103,7 +194,8 @@ def _cmd_update(args: argparse.Namespace) -> int:
         new_version = _pkg.__version__
     except Exception:
         new_version = "（重新打开终端后生效）"
-    print(f"[sjtu-agent update] ✅ 更新完成！新版本：{new_version}")
+    print(f"\n[OK] 更新完成！当前版本：{new_version}")
+    print("  如果 feishu-bot 等功能未生效，请重新打开终端。")
     return 0
 
 
@@ -334,22 +426,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     update_parser = subparsers.add_parser(
         "update",
-        help="pull latest code from git and reinstall the package",
+        help="从远端仓库拉取最新代码并重装",
     )
     update_parser.add_argument(
         "--skip-git",
         action="store_true",
-        help="skip git pull (only reinstall dependencies)",
+        help="跳过 git pull，仅重装依赖",
     )
     update_parser.add_argument(
         "--upgrade-deps",
         action="store_true",
-        help="also upgrade all Python dependencies to their latest versions",
+        help="同时升级所有 Python 依赖至最新版",
     )
     update_parser.add_argument(
         "--update-playwright",
         action="store_true",
-        help="also update Playwright Chromium browser",
+        help="同时更新 Playwright Chromium 浏览器",
     )
     update_parser.set_defaults(func=_cmd_update)
 
