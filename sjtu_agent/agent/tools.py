@@ -54,7 +54,7 @@ _SHUIYUAN_MCP_DISCLOSURE = (
     f"to commit {_SHUIYUAN_MCP_PINNED_REF} instead of pulling future changes automatically."
 )
 _YKST_MCP_REPO = "https://github.com/dajiaohuang/ykst-treehole-mcp.git"
-_YKST_MCP_PINNED_REF = "44af57e9bad653f2fe929527d7f326995445ecd7"
+_YKST_MCP_PINNED_REF = "204d9611f0a83859654b97fa42571f4d9d45829c"
 _YKST_MCP_DISCLOSURE = (
     "Disclosure: dajiaohuang/ykst-treehole-mcp is maintained by @dajiaohuang, "
     "the author of this setup integration. The default setup pins the checkout "
