@@ -69,22 +69,23 @@ def parse_dt(s: str) -> datetime | None:
     if not s:
         return None
     s = s.strip()
-    fmts = [
-        "%Y-%m-%dT%H:%M:%SZ",
-        "%Y-%m-%dT%H:%M:%S.%fZ",
-        "%Y-%m-%dT%H:%M:%S+08:00",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y/%m/%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y/%m/%d %H:%M",
+    # (fmt, default_tz)：strptime 不会从 Z/+08:00 字面量推断时区，必须显式指定。
+    fmts: list[tuple[str, timezone | None]] = [
+        ("%Y-%m-%dT%H:%M:%SZ", timezone.utc),
+        ("%Y-%m-%dT%H:%M:%S.%fZ", timezone.utc),
+        ("%Y-%m-%dT%H:%M:%S+08:00", CST),
+        ("%Y-%m-%dT%H:%M:%S", None),
+        ("%Y-%m-%d %H:%M:%S", None),
+        ("%Y/%m/%d %H:%M:%S", None),
+        ("%Y-%m-%d %H:%M", None),
+        ("%Y/%m/%d %H:%M", None),
     ]
-    for fmt in fmts:
+    for fmt, default_tz in fmts:
         try:
             dt = datetime.strptime(s, fmt)
             if dt.tzinfo is None:
-                # 无时区信息默认为 CST
-                dt = dt.replace(tzinfo=CST)
+                # 格式自带时区标记的（Z / +08:00）用对应时区；纯本地时间默认 CST
+                dt = dt.replace(tzinfo=default_tz or CST)
             return dt.astimezone(CST)
         except ValueError:
             continue
