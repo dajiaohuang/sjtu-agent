@@ -107,9 +107,9 @@ TOOLS = [
         "function": {
             "name": "setup_ykst",
             "description": (
-                "Start native YKST/TreeHole login. It opens or returns the JAccount OAuth URL; "
-                "after login, the user should paste the callback URL so ykst_login_with_callback can save the session token. "
-                "Call when the user says '配置树洞', '登录树洞', '配置 YKST', or 'setup treehole'."
+                "Start native YKST/TreeHole login. Automatically opens Chrome, watches for the OAuth callback URL, "
+                "and saves the session token — no manual copy/paste needed. Falls back to returning the login URL "
+                "if Chrome is unavailable. Call when the user says '配置树洞', '登录树洞', '配置 YKST', or 'setup treehole'."
             ),
             "parameters": {
                 "type": "object",
@@ -2008,6 +2008,21 @@ def tool_setup_ykst(redirect_uri: str = "", open_browser: bool = True) -> dict:
     """Start the native YKST OAuth login flow and return the login URL."""
     from sjtu_agent import ykst_client
 
+    if open_browser:
+        try:
+            result = ykst_client.login_with_browser_watch(
+                redirect_uri or ykst_client.DEFAULT_REDIRECT_URI,
+            )
+            return {
+                "success": True,
+                "authenticated": True,
+                "auto_captured": True,
+                "host": result.get("host"),
+                "token_hint": result.get("token_hint"),
+            }
+        except Exception:
+            pass
+
     try:
         info = ykst_client.get_login_url(redirect_uri or ykst_client.DEFAULT_REDIRECT_URI)
     except Exception as e:
@@ -2017,6 +2032,7 @@ def tool_setup_ykst(redirect_uri: str = "", open_browser: bool = True) -> dict:
     if open_browser:
         try:
             import webbrowser
+
             opened_browser = bool(webbrowser.open(info["loginUrl"]))
         except Exception:
             opened_browser = False

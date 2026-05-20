@@ -223,18 +223,31 @@ def _cmd_ykst_login(args: argparse.Namespace) -> int:
         print_json(result)
         return 0
 
+    if not args.no_browser:
+        try:
+            result = ykst_client.login_with_browser_watch(
+                args.redirect_uri or ykst_client.DEFAULT_REDIRECT_URI,
+            )
+            print_json(result)
+            return 0
+        except Exception as e:
+            print_json({"error": str(e), "fallback": "manual"})
+
     info = ykst_client.get_login_url(args.redirect_uri or ykst_client.DEFAULT_REDIRECT_URI)
     opened_browser = False
     if not args.no_browser:
         try:
             import webbrowser
+
             opened_browser = bool(webbrowser.open(info["loginUrl"]))
         except Exception:
             opened_browser = False
     print_json({
         "login_url": info["loginUrl"],
         "opened_browser": opened_browser,
-        "next_action": "After JAccount login, rerun with --callback-url '<full callback URL>' or --code '<code>'.",
+        "next_action": (
+            "After JAccount login, rerun with --callback-url '<full callback URL>' or --code '<code>'."
+        ),
     })
     return 0
 

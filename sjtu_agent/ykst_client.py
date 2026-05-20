@@ -9,6 +9,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -31,6 +37,49 @@ LOAD_DIRECTION_DOWN = 0
 RATE_NORMAL = 0
 RATE_HATE = -1
 RATE_LIKE = 1
+
+
+def _find_chrome() -> str | None:
+    env_chrome = os.environ.get("CHROME_PATH")
+    if env_chrome and Path(env_chrome).exists():
+        return env_chrome
+
+    if sys.platform == "win32":
+        candidates = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), r"Google\Chrome\Application\chrome.exe"),
+            os.path.join(os.environ.get("PROGRAMFILES", ""), r"Google\Chrome\Application\chrome.exe"),
+            os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), r"Google\Chrome\Application\chrome.exe"),
+        ]
+    elif sys.platform == "darwin":
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        ]
+    else:
+        candidates = [
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+        ]
+
+    for c in candidates:
+        if c and Path(c).exists():
+            return c
+
+    for name in ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"]:
+        found = shutil.which(name)
+        if found:
+            return found
+
+    return None
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 class YKSTError(RuntimeError):
@@ -634,6 +683,66 @@ def get_login_url(redirect_uri: str = DEFAULT_REDIRECT_URI) -> dict:
     })
     login_url = urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
     return {**config, "redirectUri": redirect_uri, "loginUrl": login_url}
+
+
+def _wait_for_callback_url(port: int, timeout_ms: int = 180000) -> str:
+    started = time.monotonic()
+    while (time.monotonic() - started) * 1000 < timeout_ms:
+        try:
+            resp = requests.get(f"http://127.0.0.1:{port}/json/list", timeout=2)
+            targets = resp.json()
+            for target in targets:
+                url = target.get("url", "")
+                if "/auth/jaccount" in url:
+                    parsed = urllib.parse.urlparse(url)
+                    code = dict(urllib.parse.parse_qsl(parsed.query)).get("code")
+                    if code:
+                        return url
+        except Exception:
+            pass
+        time.sleep(0.8)
+    raise YKSTError("等待浏览器登录超时（3 分钟），请重新尝试或使用手动流程。")
+
+
+def login_with_browser_watch(
+    redirect_uri: str = DEFAULT_REDIRECT_URI,
+    timeout_ms: int = 180000,
+) -> dict:
+    chrome = _find_chrome()
+    if not chrome:
+        raise YKSTError("未找到 Chrome 浏览器，请设置 CHROME_PATH 环境变量后重试，或使用手动流程。")
+
+    info = get_login_url(redirect_uri)
+    login_url = info["loginUrl"]
+
+    port = int(os.environ.get("TREEHOLE_LOGIN_DEBUG_PORT", "0")) or _free_port()
+
+    profile = os.environ.get(
+        "TREEHOLE_LOGIN_CHROME_PROFILE",
+        str(Path(tempfile.gettempdir()) / "sjtu-agent-ykst-login"),
+    )
+    Path(profile).mkdir(parents=True, exist_ok=True)
+
+    proc = subprocess.Popen(
+        [
+            chrome,
+            f"--user-data-dir={profile}",
+            f"--remote-debugging-port={port}",
+            "--new-window",
+            login_url,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    try:
+        callback_url = _wait_for_callback_url(port, timeout_ms)
+        return login_with_callback_url(callback_url)
+    finally:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
 
 
 def login_with_code(code: str) -> dict:
