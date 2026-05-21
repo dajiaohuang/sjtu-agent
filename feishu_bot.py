@@ -571,6 +571,14 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
             print(f"[feishu] 跳过重复消息 message_id={message_id}")
             return
 
+        # ── 忽略积压的旧消息（Bot 断连期间飞书积累的事件，重启后被重放）──
+        _MAX_MSG_AGE_SEC = 120
+        create_time_ms = int(getattr(msg, "create_time", 0) or 0)
+        if create_time_ms and time.time() - create_time_ms / 1000 > _MAX_MSG_AGE_SEC:
+            print(f"[feishu] 跳过过期消息 message_id={message_id} "
+                  f"age={time.time() - create_time_ms / 1000:.0f}s")
+            return
+
         if msg_type != "text":
             _reply_text(message_id, f"(暂不支持的消息类型: {msg_type}，目前只接收文本)")
             return
