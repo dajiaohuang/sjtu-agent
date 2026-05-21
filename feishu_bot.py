@@ -227,6 +227,85 @@ _PostParagraph = list  # list[_PostElement]
 _PostContent = list  # list[_PostParagraph]
 
 
+def _render_table_visual(md_text: str) -> str:
+    """将 Markdown 表格转为可视化排版（Feishu post/card markdown 元素不支持表格）。"""
+    lines = md_text.strip().split("\n")
+    # 找出表格行范围
+    table_start = table_end = -1
+    for i, line in enumerate(lines):
+        if _MD_TABLE_SEP_RE.match(line.strip()):
+            table_start = i - 1  # 表头行在分隔行上方
+            break
+    if table_start < 0:
+        return md_text
+    # 找表格结束
+    for i in range(table_start + 1, len(lines)):
+        stripped = lines[i].strip()
+        if stripped.startswith("|") and i != table_start + 1:
+            continue  # still in table
+        elif i == table_start + 1:
+            continue  # skip separator
+        else:
+            table_end = i - 1
+            break
+    else:
+        table_end = len(lines) - 1
+
+    # 解析表格行
+    def parse_row(row: str) -> list[str]:
+        cells = row.strip().strip("|").split("|")
+        return [c.strip() for c in cells]
+
+    header = parse_row(lines[table_start])
+    data_rows = []
+    for i in range(table_start + 2, table_end + 1):
+        if lines[i].strip():
+            data_rows.append(parse_row(lines[i]))
+
+    all_rows = [header] + data_rows
+    if not all_rows:
+        return md_text
+
+    # 计算列宽（中文字符算 2）
+    def cell_width(s: str) -> int:
+        w = 0
+        for c in s:
+            w += 2 if ord(c) > 127 else 1
+        return w
+
+    ncols = len(header)
+    col_widths = [0] * ncols
+    for row in all_rows:
+        for j in range(min(ncols, len(row))):
+            col_widths[j] = max(col_widths[j], cell_width(row[j]))
+
+    # 中文字符填充
+    def pad_cell(s: str, target_w: int) -> str:
+        current = cell_width(s)
+        padding = target_w - current
+        return s + " " * max(padding, 0)
+
+    # 构建可视化表格
+    sep = "  "
+    top = "┌" + "┬".join("─" * (w + 2) for w in col_widths) + "┐"
+    mid = "├" + "┼".join("─" * (w + 2) for w in col_widths) + "┤"
+    bot = "└" + "┴".join("─" * (w + 2) for w in col_widths) + "┘"
+
+    result_lines = [top]
+    for ri, row in enumerate(all_rows):
+        cells = [pad_cell(row[j] if j < len(row) else "", col_widths[j]) for j in range(ncols)]
+        result_lines.append("│ " + " │ ".join(cells) + " │")
+        if ri == 0:  # after header
+            result_lines.append(mid)
+    result_lines.append(bot)
+
+    visual = "\n".join(result_lines)
+    # 替换原文本中的表格部分
+    before = "\n".join(lines[:table_start])
+    after = "\n".join(lines[table_end + 1:]) if table_end + 1 < len(lines) else ""
+    return (before + "\n" if before else "") + visual + ("\n" + after if after else "")
+
+
 def _has_table(md_text: str) -> bool:
     """检测 Markdown 文本是否包含表格。"""
     lines = md_text.strip().split("\n")
@@ -389,10 +468,9 @@ def _reply_text(message_id: str, text: str) -> None:
     if not text.strip():
         return
 
-    # 含表格 → 用 interactive 卡片（markdown 元素原生支持表格）
+    # 含表格 → 转为可视化排版（飞书 card markdown 元素不支持 GFM 表格）
     if _has_table(text):
-        _reply_card(message_id, text)
-        return
+        text = _render_table_visual(text)
 
     # 普通内容 → post 格式
     post_content = _build_post_content(text)
