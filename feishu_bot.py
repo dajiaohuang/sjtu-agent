@@ -442,8 +442,11 @@ def _reply_card(message_id: str, text: str) -> None:
     )
     resp = _api_client.im.v1.message.reply(req)
     if not resp.success():
-        print(f"[feishu] card 回复失败 code={resp.code} msg={resp.msg}，降级为 text")
+        print(f"[feishu] card 回复失败 code={resp.code} msg={resp.msg}")
+        # 降级为 text（此时表格渲染为纯文本）
         _reply_raw_text(message_id, text)
+    else:
+        print(f"[feishu] card 回复成功")
 
 
 def _reply_raw_text(message_id: str, text: str) -> None:
