@@ -64,8 +64,48 @@ def _send_telegram(text: str) -> None:
                 print(f"[daily_report] Telegram 推送失败 uid={uid}: {e}")
 
 
+def _html_to_post(text: str) -> list:
+    """将日报 HTML（<b>/<i>/<br>）转为飞书 post 格式的段落列表。"""
+    import re
+    paragraphs = []
+    # 按 <br> 或换行分割段落
+    raw_paras = re.split(r"<br\s*/?>|\n", text)
+    for para in raw_paras:
+        para = para.strip()
+        if not para:
+            continue
+        elements = []
+        # 解析 <b>...</b> 和 <i>...</i>
+        pos = 0
+        for m in re.finditer(r"<(/?)([bi])>", para):
+            tag_start, tag = m.groups()
+            # 标签前的纯文本
+            prefix = para[pos:m.start()]
+            if prefix:
+                elements.append({"tag": "text", "text": prefix})
+            if not tag_start:  # opening tag
+                pos = m.end()
+            else:  # closing tag
+                inner = para[pos:m.start()]
+                if inner:
+                    el = {"tag": "text", "text": inner}
+                    if tag == "b":
+                        el["style"] = ["bold"]
+                    elif tag == "i":
+                        el["style"] = ["italic"]
+                    elements.append(el)
+                pos = m.end()
+        # 剩余纯文本
+        remaining = para[pos:]
+        if remaining:
+            elements.append({"tag": "text", "text": remaining})
+        if elements:
+            paragraphs.append(elements)
+    return paragraphs
+
+
 def _send_feishu(text: str) -> None:
-    """通过飞书 API 向用户私聊推送日报。"""
+    """通过飞书 API 向用户私聊推送日报（post 格式，支持 Markdown 渲染）。"""
     try:
         cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except Exception:
@@ -80,10 +120,8 @@ def _send_feishu(text: str) -> None:
         print("[daily_report] 飞书未配置（feishu_app_id/secret/open_id），跳过推送")
         return
 
-    # 把日报的 HTML 标签转为飞书兼容的 Markdown
-    import re
-    md_text = re.sub(r"</?b>", "**", text)
-    md_text = re.sub(r"</?i>", "*", md_text)
+    # 把 HTML 转为飞书 post 段落格式
+    post_paras = _html_to_post(text)
 
     # 获取 tenant_access_token
     import requests
@@ -100,13 +138,14 @@ def _send_feishu(text: str) -> None:
         print(f"[daily_report] 飞书 token 请求异常: {e}")
         return
 
-    # 分块发送
-    chunks = [md_text[i:i + 3800] for i in range(0, len(md_text), 3800)]
-    for chunk in chunks:
+    # 按段落数分块发送（post 格式有大段限制）
+    para_chunks = [post_paras[i:i + 25] for i in range(0, len(post_paras), 25)]
+    for para_chunk in para_chunks:
+        content = {"zh_cn": {"title": "", "content": para_chunk}}
         body = {
             "receive_id": open_id,
-            "msg_type": "text",
-            "content": json.dumps({"text": chunk}, ensure_ascii=False),
+            "msg_type": "post",
+            "content": json.dumps(content, ensure_ascii=False),
         }
         try:
             r = requests.post(
@@ -360,7 +399,11 @@ if __name__ == "__main__":
         report = build_report()
         if args.test:
             print("\n" + "="*60)
-            print(report)
+            try:
+                print(report)
+            except UnicodeEncodeError:
+                print(report.encode(sys.stdout.encoding or "utf-8", errors="replace")
+                      .decode(sys.stdout.encoding or "utf-8", errors="replace"))
             print("="*60)
             _log("测试模式，未发送")
         else:
@@ -368,5 +411,5 @@ if __name__ == "__main__":
             _send_feishu(report)
             _log("汇报已发送")
     except Exception as e:
-        _log(f"❌ 发生错误: {e}")
+        _log(f"[X] 发生错误: {e}")
         traceback.print_exc()
