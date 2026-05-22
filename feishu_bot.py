@@ -673,7 +673,18 @@ def _handle_commands(open_id: str, text: str) -> str | None:
             for i, m in enumerate(user_msgs[-10:]):
                 lines.append(f"  {i+1}. {m.get('content', '')[:60]}")
             return "\n".join(lines)
-        return f"未知命令：{cmd}。可用：/new /list /switch /name /delete /history"
+        if cmd == "/help":
+            return (
+                "**飞书 Bot 命令帮助**\n\n"
+                "`/new <名称>`  创建新对话并切换\n"
+                "`/list`  列出所有对话及其序号\n"
+                "`/switch <序号>`  切换活跃对话\n"
+                "`/name <序号> <名称>`  重命名对话\n"
+                "`/delete <序号>`  删除对话\n"
+                "`/history`  查看当前对话最近消息\n"
+                "`/help`  显示此帮助"
+            )
+        return f"未知命令：{cmd}。输入 /help 查看可用命令。"
 
 
 def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
