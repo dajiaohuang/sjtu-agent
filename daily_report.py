@@ -64,6 +64,66 @@ def _send_telegram(text: str) -> None:
                 print(f"[daily_report] Telegram 推送失败 uid={uid}: {e}")
 
 
+def _send_feishu(text: str) -> None:
+    """通过飞书 API 向用户私聊推送日报。"""
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not cfg.get("feishu_enabled", True):
+        print("[daily_report] 飞书推送已关闭，跳过")
+        return
+    app_id = cfg.get("feishu_app_id", "")
+    app_secret = cfg.get("feishu_app_secret", "")
+    open_id = cfg.get("feishu_open_id", "")
+    if not app_id or not app_secret or not open_id:
+        print("[daily_report] 飞书未配置（feishu_app_id/secret/open_id），跳过推送")
+        return
+
+    # 把日报的 HTML 标签转为飞书兼容的 Markdown
+    import re
+    md_text = re.sub(r"</?b>", "**", text)
+    md_text = re.sub(r"</?i>", "*", md_text)
+
+    # 获取 tenant_access_token
+    import requests
+    try:
+        r = requests.post(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            json={"app_id": app_id, "app_secret": app_secret}, timeout=10,
+        )
+        if r.status_code != 200 or r.json().get("code") != 0:
+            print(f"[daily_report] 飞书 token 获取失败: {r.text[:100]}")
+            return
+        token = r.json()["tenant_access_token"]
+    except Exception as e:
+        print(f"[daily_report] 飞书 token 请求异常: {e}")
+        return
+
+    # 分块发送
+    chunks = [md_text[i:i + 3800] for i in range(0, len(md_text), 3800)]
+    for chunk in chunks:
+        body = {
+            "receive_id": open_id,
+            "msg_type": "text",
+            "content": json.dumps({"text": chunk}, ensure_ascii=False),
+        }
+        try:
+            r = requests.post(
+                "https://open.feishu.cn/open-apis/im/v1/messages",
+                params={"receive_id_type": "open_id"},
+                headers={"Authorization": f"Bearer {token}"},
+                json=body, timeout=15,
+            )
+            if r.status_code != 200 or r.json().get("code") != 0:
+                print(f"[daily_report] 飞书推送失败: {r.text[:100]}")
+                return
+        except Exception as e:
+            print(f"[daily_report] 飞书推送异常: {e}")
+            return
+    print("[daily_report] 飞书推送完成")
+
+
 # ── 数据收集 ──────────────────────────────────────────────────────────────────
 
 def _collect_data() -> dict:
@@ -305,7 +365,8 @@ if __name__ == "__main__":
             _log("测试模式，未发送")
         else:
             _send_telegram(report)
-            _log("✅ 汇报已发送")
+            _send_feishu(report)
+            _log("汇报已发送")
     except Exception as e:
         _log(f"❌ 发生错误: {e}")
         traceback.print_exc()

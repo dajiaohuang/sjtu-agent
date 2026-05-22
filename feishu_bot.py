@@ -764,6 +764,16 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
             print(f"[feishu] [i] 白名单为空，已允许所有人；建议把此 open_id 加入白名单："
                   f"{sender_open_id}")
 
+        # ── 保存 open_id 供 daily_report 推送使用 ──────────────────────
+        if sender_open_id:
+            try:
+                cfg_data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+                if cfg_data.get("feishu_open_id") != sender_open_id:
+                    cfg_data["feishu_open_id"] = sender_open_id
+                    CONFIG_PATH.write_text(json.dumps(cfg_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
         # ── 提交到后台线程，立即返回 ──
         _EXECUTOR.submit(_process_in_thread, sender_open_id, message_id, text)
 
