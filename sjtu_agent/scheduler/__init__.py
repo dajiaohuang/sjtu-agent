@@ -147,7 +147,8 @@ def daemon_status(
 
 def available_service_names() -> tuple[str, ...]:
     """返回所有可用的服务名称。"""
-    return ("daily-report", "remind-check", "telegram-bot", "wechat-bot", "feishu-bot")
+    return ("daily-report", "morning-report", "noon-report", "remind-check",
+            "telegram-bot", "wechat-bot", "feishu-bot")
 
 
 def current_platform_name() -> str:

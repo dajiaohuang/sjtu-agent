@@ -25,7 +25,23 @@ _SERVICE_SPECS = {
         "log": "daily_report.systemd.log",
         "restart": "no",
         "has_timer": True,
-        "timer_type": "calendar",   # OnCalendar
+        "timer_type": "calendar",
+    },
+    "morning-report": {
+        "unit_name": "sjtu-agent-morning-report",
+        "subcommand": "daily-report --type morning",
+        "log": "morning_report.systemd.log",
+        "restart": "no",
+        "has_timer": True,
+        "timer_type": "calendar",
+    },
+    "noon-report": {
+        "unit_name": "sjtu-agent-noon-report",
+        "subcommand": "daily-report --type noon",
+        "log": "noon_report.systemd.log",
+        "restart": "no",
+        "has_timer": True,
+        "timer_type": "calendar",
     },
     "remind-check": {
         "unit_name": "sjtu-agent-remind-check",

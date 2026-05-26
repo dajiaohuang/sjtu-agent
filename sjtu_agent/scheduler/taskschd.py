@@ -25,6 +25,18 @@ _SERVICE_SPECS = {
         "log": "daily_report.task.log",
         "schedule": "daily",    # 每天定时
     },
+    "morning-report": {
+        "task_name": f"{_TASK_PREFIX}-MorningReport",
+        "subcommand": "daily-report --type morning",
+        "log": "morning_report.task.log",
+        "schedule": "daily",
+    },
+    "noon-report": {
+        "task_name": f"{_TASK_PREFIX}-NoonReport",
+        "subcommand": "daily-report --type noon",
+        "log": "noon_report.task.log",
+        "schedule": "daily",
+    },
     "remind-check": {
         "task_name": f"{_TASK_PREFIX}-RemindCheck",
         "subcommand": "remind-check",
@@ -128,12 +140,19 @@ def install(
 
         # 根据调度类型构建 schtasks 参数
         if spec["schedule"] == "daily":
+            # 不同报告类型使用不同时间
+            if name == "morning-report":
+                hh, mm = 8, 0
+            elif name == "noon-report":
+                hh, mm = 12, 0
+            else:
+                hh, mm = hour, minute
             schtask_args = [
                 "schtasks", "/Create",
                 "/TN", task_name,
                 "/TR", f'"{program}" {arguments}',
                 "/SC", "DAILY",
-                "/ST", f"{hour:02d}:{minute:02d}",
+                "/ST", f"{hh:02d}:{mm:02d}",
                 "/F",
             ]
         elif spec["schedule"] == "minute":

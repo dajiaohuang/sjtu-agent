@@ -24,6 +24,20 @@ _SERVICE_SPECS = {
         "run_at_load": False,
         "schedule_type": "calendar",
     },
+    "morning-report": {
+        "label": "com.sjtu.morning-report",
+        "subcommand": "daily-report --type morning",
+        "log": "morning_report.launchd.log",
+        "run_at_load": False,
+        "schedule_type": "calendar",
+    },
+    "noon-report": {
+        "label": "com.sjtu.noon-report",
+        "subcommand": "daily-report --type noon",
+        "log": "noon_report.launchd.log",
+        "run_at_load": False,
+        "schedule_type": "calendar",
+    },
     "remind-check": {
         "label": "com.sjtu.remind",
         "subcommand": "remind-check",
@@ -96,6 +110,10 @@ def _build_plist(
     if spec["schedule_type"] == "calendar":
         if name == "news-digest":
             hour, minute = news_digest_time
+        elif name == "morning-report":
+            hour, minute = (8, 0)
+        elif name == "noon-report":
+            hour, minute = (12, 0)
         else:
             hour, minute = daily_report_time
         payload["StartCalendarInterval"] = {"Hour": hour, "Minute": minute}

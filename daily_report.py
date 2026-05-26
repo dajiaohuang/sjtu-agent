@@ -190,10 +190,17 @@ def _collect_data() -> dict:
 
 _WEEKDAY_ZH = ["一", "二", "三", "四", "五", "六", "日"]
 
-def build_report() -> str:
+def build_report(report_type: str = "evening") -> str:
     """收集数据 → 调用 AI 生成中文汇报 → 返回 HTML 格式字符串。"""
     now = dt.datetime.now(dc.CST)
     date_str = f"{now.strftime('%Y年%m月%d日')}（星期{_WEEKDAY_ZH[now.weekday()]}）"
+    hour = now.hour
+    if report_type == "morning":
+        label = "晨间学习早报"
+    elif report_type == "noon":
+        label = "午间学习速报"
+    else:
+        label = "晚间学习日报"
 
     print("[daily_report] 正在收集数据…")
     data = _collect_data()
@@ -284,22 +291,29 @@ def build_report() -> str:
 
     _THINK_RE = __import__("re").compile(r"<think>.*?</think>", __import__("re").DOTALL)
 
-    prompt = f"""你是一个贴心的学习助手，请根据以下数据为上海交通大学学生生成一份简洁的晚间学习日报。
+    _type_hints = {
+        "morning": "今日课程安排+今日截止DDL+晨间行动建议（如：早上有什么课、今天要交什么）",
+        "noon":   "下午课程安排+临近DDL提醒+午间行动建议（如：下午有什么课、明天截止的作业）",
+        "evening": "今日总结+明日预告+晚间行动建议（如：今天完成了什么、明天要准备什么）",
+    }
+    hint = _type_hints.get(report_type, _type_hints["evening"])
+    prompt = f"""你是一个贴心的学习助手，请根据以下数据为上海交通大学学生生成一份{label}。
 
 要求：
 - 使用 Telegram HTML 格式（只用 <b> <i> 标签，不用 Markdown），不要用 * # 符号
 - 语气友好简洁，像朋友发消息，不要太正式
 - 全部用中文
+- 时间段：现在是{report_type}（{hint}）
 - 按以下固定结构输出：
 
-第1行：📊 <b>{date_str} 学习日报</b>
+第1行：📊 <b>{date_str} {label}</b>
 
 然后依次输出以下几节（每节空一行）：
 📚 <b>作业 DDL</b>：列出今日/本周截止任务（如无则写"暂无紧急 DDL ✅"）；每条注明距截止时间
 📅 <b>今日课程</b>：课程名+时间（如无课则写"今日无课"）
 🔬 <b>下次实验</b>：时间、地点（如无则写"暂无安排"）
 📢 <b>教务通知</b>：最多2条关键通知摘要（如无则写"暂无新通知"）
-💡 <b>今晚建议</b>：根据当前 DDL 紧急程度，用1-2句话给出具体行动建议
+💡 <b>行动建议</b>：根据当前 DDL 紧急程度和时段，用1-2句话给出具体建议
 
 以下是收集到的数据：
 {data_ctx}"""
@@ -387,12 +401,14 @@ def _log(msg: str) -> None:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--test", action="store_true", help="打印汇报但不发送 Telegram")
+    parser.add_argument("--test", action="store_true", help="打印汇报但不发送")
+    parser.add_argument("--type", choices=["morning", "noon", "evening"],
+                        default="evening", help="汇报类型（morning/noon/evening）")
     args = parser.parse_args()
 
-    _log("=== 每日汇报开始 ===")
+    _log(f"=== {args.type} 汇报开始 ===")
     try:
-        report = build_report()
+        report = build_report(report_type=args.type)
         if args.test:
             print("\n" + "="*60)
             try:

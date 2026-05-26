@@ -22,6 +22,14 @@ _SERVICE_SPECS = {
         "session_name": "daily-report",
         "subcommand": "daily-report",
     },
+    "morning-report": {
+        "session_name": "morning-report",
+        "subcommand": "daily-report --type morning",
+    },
+    "noon-report": {
+        "session_name": "noon-report",
+        "subcommand": "daily-report --type noon",
+    },
     "remind-check": {
         "session_name": "remind-check",
         "subcommand": "remind-check",
