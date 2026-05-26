@@ -2212,8 +2212,9 @@ def _fetch_ddls_parallel(cfg: dict, skip_canvas=False, skip_aihaoke=False, skip_
     if not skip_icourse:  tasks.append(("icourse", lambda: dc.fetch_icourse(cfg)))
 
     all_ddl: list = []
+    errors: list[str] = []
     if not tasks:
-        return all_ddl
+        return all_ddl, errors
 
     with _cf.ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         futures = {pool.submit(fn): name for name, fn in tasks}
@@ -2221,10 +2222,12 @@ def _fetch_ddls_parallel(cfg: dict, skip_canvas=False, skip_aihaoke=False, skip_
             try:
                 all_ddl.extend(fut.result())
             except Exception as e:
-                print(f"[DDL] {futures[fut]} 拉取失败：{e}")
+                msg = f"{futures[fut]} 拉取失败：{e}"
+                print(f"[DDL] {msg}")
+                errors.append(msg)
 
     _ddl_cache_set(cache_key, all_ddl)
-    return all_ddl
+    return all_ddl, errors
 
 
 def _prefetch_ddls_background() -> None:
@@ -2328,11 +2331,12 @@ def tool_get_ddls(skip_canvas=False, skip_aihaoke=False, skip_icourse=False):
     import datetime as _dt
     cfg = dc.load_config()
     now = _dt.datetime.now(dc.CST)
-    all_ddl = _fetch_ddls_parallel(cfg, skip_canvas, skip_aihaoke, skip_icourse)
+    all_ddl, errors = _fetch_ddls_parallel(cfg, skip_canvas, skip_aihaoke, skip_icourse)
     all_ddl.sort(key=lambda x: x["due"])
     warnings = []
     if not skip_canvas and not (cfg.get("canvas_token") and not cfg.get("canvas_token", "").startswith("YOUR_")):
         warnings.append("Canvas 未配置 token；请先调用 setup_canvas 获取引导，生成后再用 save_credentials 保存。")
+    warnings.extend(errors)
     return {
         "current_time": now.strftime("%Y-%m-%d %H:%M"),
         "ddls": [_serialize_ddl(x, now) for x in all_ddl if not x.get("submitted")],
@@ -2352,7 +2356,7 @@ def tool_get_all(skip_canvas=False, skip_aihaoke=False, skip_icourse=False, skip
     with _cf.ThreadPoolExecutor(max_workers=2) as pool:
         ddl_fut = pool.submit(_fetch_ddls_parallel, cfg, skip_canvas, skip_aihaoke, skip_icourse)
         lab_fut = pool.submit(dc.fetch_phycai, cfg) if not skip_phycai else None
-        all_ddl = ddl_fut.result()
+        all_ddl, errors = ddl_fut.result()
         lab = lab_fut.result() if lab_fut else None
 
     import datetime as _dt
@@ -2361,6 +2365,7 @@ def tool_get_all(skip_canvas=False, skip_aihaoke=False, skip_icourse=False, skip
     warnings = []
     if not skip_canvas and not (cfg.get("canvas_token") and not cfg.get("canvas_token", "").startswith("YOUR_")):
         warnings.append("Canvas 未配置 token；请先调用 setup_canvas 获取引导，生成后再用 save_credentials 保存。")
+    warnings.extend(errors)
     return {
         "current_time": now.strftime("%Y-%m-%d %H:%M"),
         "ddls": [_serialize_ddl(x, now) for x in all_ddl if not x.get("submitted")],
