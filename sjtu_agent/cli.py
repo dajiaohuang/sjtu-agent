@@ -154,8 +154,8 @@ def _cmd_update(args: argparse.Namespace) -> int:
                 print("[!] 自动更新失败，请手动处理：")
                 print(f"    cd {PROJECT_ROOT}")
                 print("    git status    # 查看当前状态")
-                print("    git log --oneline -5   # 查看本地提交")
-                print("    如有未推送的本地提交，可尝试: git pull --rebase")
+                print("    git rebase --abort   # 如果正在 rebase 中，先中止")
+                print("    如有未推送的提交: git pull --rebase")
                 print("    或放弃本地修改: git reset --hard origin/main")
                 return 1
 

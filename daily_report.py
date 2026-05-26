@@ -65,36 +65,41 @@ def _send_telegram(text: str) -> None:
 
 
 def _html_to_post(text: str) -> list:
-    """将日报 HTML（<b>/<i>/<br>）转为飞书 post 格式的段落列表。"""
+    """将日报 HTML（<b>/<i>/<br>）转为飞书 post 格式的段落列表。支持嵌套标签。"""
     import re
     paragraphs = []
-    # 按 <br> 或换行分割段落
     raw_paras = re.split(r"<br\s*/?>|\n", text)
     for para in raw_paras:
         para = para.strip()
         if not para:
             continue
         elements = []
-        # 解析 <b>...</b> 和 <i>...</i>
         pos = 0
+        # 栈追踪当前活跃的样式
+        open_styles: list[str] = []
         for m in re.finditer(r"<(/?)([bi])>", para):
-            tag_start, tag = m.groups()
+            tag_close, tag = m.groups()
+            # 标签前的纯文本（使用当前栈的样式）
             prefix = para[pos:m.start()]
-            if not tag_start:  # opening tag
-                if prefix:
-                    elements.append({"tag": "text", "text": prefix})
-                pos = m.end()
-            else:  # closing tag
-                inner = para[pos:m.start()]
-                if inner:
-                    el = {"tag": "text", "text": inner}
-                    el["style"] = ["bold"] if tag == "b" else ["italic"]
-                    elements.append(el)
-                pos = m.end()
-        # 剩余纯文本
+            if prefix:
+                el = {"tag": "text", "text": prefix}
+                if open_styles:
+                    el["style"] = list(open_styles)
+                elements.append(el)
+            if not tag_close:
+                open_styles.append("bold" if tag == "b" else "italic")
+            else:
+                style = "bold" if tag == "b" else "italic"
+                if style in open_styles:
+                    open_styles.remove(style)
+                # 不在此处创建元素——合并到下一个 prefix 或 remaining
+            pos = m.end()
         remaining = para[pos:]
         if remaining:
-            elements.append({"tag": "text", "text": remaining})
+            el = {"tag": "text", "text": remaining}
+            if open_styles:
+                el["style"] = list(open_styles)
+            elements.append(el)
         if elements:
             paragraphs.append(elements)
     return paragraphs

@@ -355,11 +355,33 @@ def _build_post_content(md_text: str) -> _PostContent:
     """将 Markdown 文本转换为飞书 post 格式的 content 二维数组。"""
     paragraphs: _PostContent = []
     lines = md_text.strip().split("\n")
+    in_code_block = False
+    code_buf: list[str] = []
+
+    def _flush_code_block():
+        nonlocal code_buf
+        if code_buf:
+            # 代码块整体作为一个段落，用 │ 前缀标记
+            code_text = "\n".join(code_buf)
+            paragraphs.append([_el_text(code_text)])
+            code_buf = []
 
     for line in lines:
         stripped = line.strip()
+        # Code block: triple backtick fence
+        if stripped.startswith("```"):
+            if in_code_block:
+                _flush_code_block()
+                in_code_block = False
+            else:
+                in_code_block = True
+                code_buf = []
+            continue
+        if in_code_block:
+            code_buf.append(line)
+            continue
         if not stripped:
-            paragraphs.append([])  # 空行
+            paragraphs.append([])
             continue
 
         # 标题 → 去掉 # 前缀，内联解析后整体加粗
@@ -403,6 +425,7 @@ def _build_post_content(md_text: str) -> _PostContent:
         elements = _parse_inline(stripped)
         paragraphs.append(elements)
 
+    _flush_code_block()  # 处理未闭合的代码块
     return paragraphs
 
 
