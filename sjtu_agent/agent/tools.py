@@ -2178,7 +2178,7 @@ def _ddl_cache_get(cache_key: str) -> list | None:
     return result
 
 
-def _ddl_cache_set(cache_key: str, data: list) -> None:
+def _ddl_cache_set(cache_key: str, data: list, errors: list | None = None) -> None:
     """将 data 写入磁盘缓存（datetime 自动序列化为 ISO 格式字符串）。"""
     import time as _t
     import datetime as _dt
@@ -2191,7 +2191,7 @@ def _ddl_cache_set(cache_key: str, data: list) -> None:
     store = _ddl_cache_load()
     import json as _json
     serializable = _json.loads(_json.dumps(data, default=_serialize))
-    store[cache_key] = {"ts": _t.time(), "data": serializable}
+    store[cache_key] = {"ts": _t.time(), "data": serializable, "errors": errors or []}
     _ddl_cache_save(store)
 
 
@@ -2207,7 +2207,8 @@ def _fetch_ddls_parallel(cfg: dict, skip_canvas=False, skip_aihaoke=False, skip_
         # 兼容旧缓存格式（v0.1.0 之前存的是纯 list）
         if isinstance(cached, list):
             return cached, []
-        return cached
+        # 缓存命中时 errors 为空（cache = 历史成功的拉取）
+        return cached, []
 
     tasks = []
     if not skip_canvas:   tasks.append(("canvas",  lambda: dc.fetch_canvas(cfg)))
@@ -2229,7 +2230,7 @@ def _fetch_ddls_parallel(cfg: dict, skip_canvas=False, skip_aihaoke=False, skip_
                 print(f"[DDL] {msg}")
                 errors.append(msg)
 
-    _ddl_cache_set(cache_key, all_ddl)
+    _ddl_cache_set(cache_key, all_ddl, errors)
     return all_ddl, errors
 
 
