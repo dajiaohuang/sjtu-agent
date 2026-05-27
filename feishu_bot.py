@@ -842,9 +842,15 @@ def _handle_commands(open_id: str, text: str) -> str | None:
 
 def _process_hw_command(sender_open_id: str, message_id: str, text: str) -> None:
     """后台执行 /hw 命令（网络 I/O + LLM，避免阻塞 event loop）。"""
-    result = _handle_commands(sender_open_id, text)
-    if result:
-        _reply_text(message_id, result)
+    try:
+        result = _handle_commands(sender_open_id, text)
+        if result:
+            _reply_text(message_id, result)
+        else:
+            _reply_text(message_id, "[homework] 命令执行完毕但无结果")
+    except Exception as e:
+        print(f"[feishu] /hw 命令异常: {e}")
+        _reply_text(message_id, f"[homework] 出错：{e}")
 
 
 def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
