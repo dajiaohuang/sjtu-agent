@@ -105,15 +105,14 @@ def _extract_code_blocks(md_text: str) -> list[tuple[str, str]]:
 
 def _generate_pdf(title: str, md_text: str, output_path: Path) -> None:
     """从 Markdown 文本生成 PDF。优先用 pdflatex，fallback 到 fpdf2。"""
-    # 优先尝试 pdflatex（LaTeX 公式完美渲染）
-    _PDFLATEX = (shutil.which("pdflatex") or
-                 "C:/Users/Lenovo/AppData/Local/Programs/MiKTeX/miktex/bin/x64/pdflatex.exe")
-    if Path(_PDFLATEX).exists():
-        _generate_pdf_latex(title, md_text, output_path, _PDFLATEX)
+    # 优先尝试 xelatex（原生 Unicode，公式完美渲染）
+    _XELATEX = "C:/Users/Lenovo/AppData/Local/Programs/MiKTeX/miktex/bin/x64/xelatex.exe"
+    if Path(_XELATEX).exists():
+        _generate_pdf_latex(title, md_text, output_path, _XELATEX)
         if output_path.exists():
-            print(f"[homework] PDF (LaTeX) 已保存: {output_path}")
+            print(f"[homework] PDF (XeLaTeX) 已保存: {output_path}")
             return
-        print("[homework] pdflatex 失败，回退 fpdf2")
+        print("[homework] xelatex 失败，回退 fpdf2")
 
     # Fallback: fpdf2
     try:
@@ -147,13 +146,8 @@ def _generate_pdf(title: str, md_text: str, output_path: Path) -> None:
 
 
 def _generate_pdf_latex(title: str, md_text: str, output_path: Path, _latex_bin: str = "") -> None:
-    """使用 xelatex 生成 PDF（原生 CJK + LaTeX 公式完美渲染）。"""
+    """使用 XeLaTeX 生成 PDF（原生 CJK + LaTeX 公式完美渲染）。"""
     import subprocess, tempfile
-    # 优先 xelatex（原生 Unicode），fallback pdflatex
-    _LATEX_BIN = _latex_bin or (
-        "C:/Users/Lenovo/AppData/Local/Programs/MiKTeX/miktex/bin/x64/xelatex.exe"
-        if Path("C:/Users/Lenovo/AppData/Local/Programs/MiKTeX/miktex/bin/x64/xelatex.exe").exists()
-        else _latex_bin)
     tex = r"""\documentclass[12pt,a4paper]{ctexart}
 \usepackage{amsmath,amssymb}
 \usepackage{geometry}\geometry{margin=2.5cm}
@@ -181,7 +175,7 @@ __BODY__
     tex_path.write_text(tex, encoding="utf-8")
     for _ in range(2):
         subprocess.run(
-            [_LATEX_BIN, "-interaction=nonstopmode", "-output-directory", tmpdir,
+            [_latex_bin, "-interaction=nonstopmode", "-output-directory", tmpdir,
              str(tex_path)],
             capture_output=True, timeout=30,
         )
