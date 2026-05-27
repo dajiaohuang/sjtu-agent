@@ -106,8 +106,10 @@ def _extract_code_blocks(md_text: str) -> list[tuple[str, str]]:
 def _generate_pdf(title: str, md_text: str, output_path: Path) -> None:
     """从 Markdown 文本生成 PDF。优先用 pdflatex，fallback 到 fpdf2。"""
     # 优先尝试 pdflatex（LaTeX 公式完美渲染）
-    if shutil.which("pdflatex"):
-        _generate_pdf_latex(title, md_text, output_path)
+    _PDFLATEX = (shutil.which("pdflatex") or
+                 "C:/Users/Lenovo/AppData/Local/Programs/MiKTeX/miktex/bin/x64/pdflatex.exe")
+    if Path(_PDFLATEX).exists():
+        _generate_pdf_latex(title, md_text, output_path, _PDFLATEX)
         if output_path.exists():
             print(f"[homework] PDF (LaTeX) 已保存: {output_path}")
             return
@@ -144,7 +146,7 @@ def _generate_pdf(title: str, md_text: str, output_path: Path) -> None:
         print(f"[homework] PDF 生成失败: {e}")
 
 
-def _generate_pdf_latex(title: str, md_text: str, output_path: Path) -> None:
+def _generate_pdf_latex(title: str, md_text: str, output_path: Path, pdflatex_bin: str = "pdflatex") -> None:
     """使用 pdflatex 生成 PDF（完美支持 LaTeX 公式和中文）。"""
     import subprocess, tempfile
     tex = r"""\documentclass[12pt,a4paper]{ctexart}
@@ -173,7 +175,7 @@ __BODY__
     tex_path.write_text(tex, encoding="utf-8")
     for _ in range(2):  # 两次编译以生成目录/引用
         subprocess.run(
-            ["pdflatex", "-interaction=nonstopmode", "-output-directory", tmpdir,
+            [pdflatex_bin, "-interaction=nonstopmode", "-output-directory", tmpdir,
              str(tex_path)],
             capture_output=True, timeout=30,
         )
