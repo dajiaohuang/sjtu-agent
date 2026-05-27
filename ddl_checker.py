@@ -1368,6 +1368,7 @@ def download_canvas_assignments(
     course_filter: str = "",
     assignment_filter: str = "",
     due_within_days: int | None = 7,
+    include_past: bool = False,
 ) -> list[dict]:
     """下载符合过滤条件的 Canvas 作业题目说明和附件，返回下载结果列表。"""
     token = cfg.get("canvas_token", "").strip()
@@ -1408,7 +1409,7 @@ def download_canvas_assignments(
                 if a.get("workflow_state") == "deleted":
                     continue
                 due = parse_dt(a.get("due_at", ""))
-                if not due or due < datetime.now(CST):
+                if not include_past and (not due or due < datetime.now(CST)):
                     continue
                 assignment_name = a.get("name", "未知作业")
                 if not _matches_assignment_download_filters(
@@ -1631,6 +1632,7 @@ def download_assignments(
     course_filter: str = "",
     assignment_filter: str = "",
     due_within_days: int | None = 7,
+    include_past: bool = False,
 ) -> list[dict]:
     """下载所有平台内符合过滤条件的近期作业材料。"""
     results: list[dict] = []
@@ -1643,6 +1645,7 @@ def download_assignments(
                 course_filter,
                 assignment_filter,
                 due_within_days,
+                include_past=include_past,
             )
         )
     if not skip_aihaoke:

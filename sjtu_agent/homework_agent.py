@@ -371,7 +371,8 @@ def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
         dc.download_assignments(
             cfg,  # 必需的第一个参数
             course_filter=course, assignment_filter=aname,
-            output_dir=str(ASSIGNMENTS_DIR), due_within_days=3650,  # 不限天数
+            output_dir=str(ASSIGNMENTS_DIR), due_within_days=3650,
+            include_past=True,  # 允许下载历史作业
         )
     except Exception as e:
         print(f"[homework] 下载失败 {course}/{aname}: {e}")
