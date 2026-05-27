@@ -134,6 +134,35 @@ def _generate_pdf(title: str, md_text: str, output_path: Path) -> None:
         print(f"[homework] PDF 生成失败: {e}")
 
 
+def _generate_html(title: str, md_text: str, output_path: Path) -> None:
+    """生成内嵌 MathJax 的 HTML，正确渲染 LaTeX 公式。"""
+    # 转移 HTML 特殊字符
+    escaped = md_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # 将 markdown 加粗转为 <b>
+    import re as _re
+    escaped = _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)
+    escaped = _re.sub(r"\*(.+?)\*", r"<i>\1</i>", escaped)
+    # $$...$$ 公式块保持原样（MathJax 直接渲染）
+    escaped = escaped.replace(chr(10), "<br>\n")
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>{title}</title>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<script>window.MathJax = {{ tex: {{ inlineMath: [['$','$'], ['\\\\(','\\\\)']], displayMath: [['$$','$$'], ['\\\\[','\\\\]']] }} }};</script>
+<style>body{{font-family:"Microsoft YaHei","SimHei",sans-serif;max-width:900px;margin:40px auto;line-height:1.8;font-size:15px;color:#222;padding:0 20px}}
+b{{color:#1a1a2e}} i{{color:#555}} table{{border-collapse:collapse;margin:10px 0}} td,th{{border:1px solid #ccc;padding:4px 10px}}
+</style></head><body>
+<h2>{title}</h2>
+<p>{escaped}</p>
+</body></html>"""
+    try:
+        output_path.write_text(html, encoding="utf-8")
+        print(f"[homework] HTML 已保存: {output_path}")
+    except Exception as e:
+        print(f"[homework] HTML 生成失败: {e}")
+
+
 def generate_solution_files(title: str, solution: str, output_dir: Path) -> list[str]:
     """生成所有格式文件（.md / .py / .pdf / .docx）。"""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -152,6 +181,11 @@ def generate_solution_files(title: str, solution: str, output_dir: Path) -> list
     _generate_pdf(title, solution, pdf_path)
     if pdf_path.exists():
         saved.append(str(pdf_path))
+    # HTML（MathJax 渲染公式）
+    html_path = output_dir / "_解答.html"
+    _generate_html(title, solution, html_path)
+    if html_path.exists():
+        saved.append(str(html_path))
     return saved
 
 
