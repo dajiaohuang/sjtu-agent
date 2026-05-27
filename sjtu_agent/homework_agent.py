@@ -135,27 +135,69 @@ def _generate_pdf(title: str, md_text: str, output_path: Path) -> None:
 
 
 def _generate_html(title: str, md_text: str, output_path: Path) -> None:
-    """生成内嵌 MathJax 的 HTML，正确渲染 LaTeX 公式。"""
-    # 转移 HTML 特殊字符
-    escaped = md_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    # 将 markdown 加粗转为 <b>
+    """生成内嵌 MathJax 的 HTML，正确渲染 LaTeX 公式和 Markdown 基础格式。"""
     import re as _re
-    escaped = _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)
-    escaped = _re.sub(r"\*(.+?)\*", r"<i>\1</i>", escaped)
-    # $$...$$ 公式块保持原样（MathJax 直接渲染）
-    escaped = escaped.replace(chr(10), "<br>\n")
+    lines = md_text.split(chr(10))
+    html_lines = []
+    in_code = False
+    in_table = False
 
+    for line in lines:
+        # Code blocks
+        if line.strip().startswith("```"):
+            in_code = not in_code
+            html_lines.append("</pre>" if not in_code else "<pre>")
+            continue
+        if in_code:
+            html_lines.append(line.replace("&", "&amp;").replace("<", "&lt;"))
+            continue
+
+        stripped = line.strip()
+        if not stripped:
+            html_lines.append("<br>")
+            continue
+
+        # Headers
+        h = _re.match(r"^(#{1,3})\s+(.+)$", stripped)
+        if h:
+            level = min(len(h.group(1)) + 1, 4)
+            html_lines.append(f"<h{level}>{h.group(2)}</h{level}>")
+            continue
+
+        # Unordered list
+        if _re.match(r"^[-*]\s+", stripped):
+            text = _re.sub(r"^[-*]\s+", "", stripped)
+            html_lines.append(f"<li>{text}</li>")
+            continue
+
+        # Ordered list
+        ol = _re.match(r"^\d+\.\s+(.+)$", stripped)
+        if ol:
+            html_lines.append(f"<li>{ol.group(1)}</li>")
+            continue
+
+        # Table separator
+        if _re.match(r"^\|?[\s\-:|]+$", stripped) and "|" in stripped:
+            continue  # skip separator rows
+
+        # Default paragraph with inline formatting
+        text = stripped.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        text = _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+        text = _re.sub(r"\*(.+?)\*", r"<i>\1</i>", text)
+        text = _re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+        html_lines.append(f"<p>{text}</p>")
+
+    body = chr(10).join(html_lines)
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><title>{title}</title>
 <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-<script>window.MathJax = {{ tex: {{ inlineMath: [['$','$'], ['\\\\(','\\\\)']], displayMath: [['$$','$$'], ['\\\\[','\\\\]']] }} }};</script>
+<script>window.MathJax={{tex:{{inlineMath:[['$','$'],['\\\\(','\\\\)']],displayMath:[['$$','$$'],['\\\\[','\\\\]']]}}}}</script>
 <style>body{{font-family:"Microsoft YaHei","SimHei",sans-serif;max-width:900px;margin:40px auto;line-height:1.8;font-size:15px;color:#222;padding:0 20px}}
-b{{color:#1a1a2e}} i{{color:#555}} table{{border-collapse:collapse;margin:10px 0}} td,th{{border:1px solid #ccc;padding:4px 10px}}
-</style></head><body>
-<h2>{title}</h2>
-<p>{escaped}</p>
-</body></html>"""
+h2,h3,h4{{color:#1a1a2e;margin-top:24px}} b{{color:#1a1a2e}} code{{background:#f4f4f4;padding:1px 4px;border-radius:3px}}
+pre{{background:#f8f8f8;padding:12px;border-radius:6px;overflow-x:auto}} li{{margin:4px 0}}
+table{{border-collapse:collapse;margin:10px 0}} td,th{{border:1px solid #ccc;padding:4px 10px}}</style></head>
+<body><h2>{title}</h2>{body}</body></html>"""
     try:
         output_path.write_text(html, encoding="utf-8")
         print(f"[homework] HTML 已保存: {output_path}")
@@ -347,8 +389,14 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
 工作流程：
 1. 读取目录中的 description.html 和所有附件
 2. 逐题解答（编程题给代码，数学题分步推导）
-3. 将解答写入 _解答.md，代码文件单独保存
+3. 将解答写入 _解答.md，代码文件单独保存为 .py/.java 等
 4. 输出 SUMMARY
+
+输出格式指南（根据作业名称自动判断）：
+- 含"代码/编程/code/C/C++/Python" → 额外保存 .py/.c/.cpp/.java 等代码文件，附 README.md
+- 含"PPT/展示/汇报/pre" → 在 _解答.md 中给出 PPT 大纲（每页标题+要点）
+- 一般作业（物理/数学/信号等） → _解答.md + _解答.html（含 MathJax 公式渲染）
+- 含"论文/报告/report" → 输出结构化文档（摘要/引言/方法/结果/结论）
 - 将解答保存为 _解答.md
 - 代码单独保存为 .py 等文件
 - 如果是 LaTeX 公式，在解答中正确排版"""
