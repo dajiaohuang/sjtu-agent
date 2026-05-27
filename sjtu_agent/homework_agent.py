@@ -409,8 +409,8 @@ def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
 def _format_list(pending: list[dict]) -> str:
     """格式化作业列表。"""
     if not pending:
-        return "[homework] 暂无未提交的 Canvas 作业"
-    lines = [f"共 {len(pending)} 个未提交 Canvas 作业："]
+        return "[homework] 暂无 Canvas 作业"
+    lines = [f"共 {len(pending)} 个作业："]
     from datetime import datetime, timezone, timedelta
     CST = timezone(timedelta(hours=8))
     for i, d in enumerate(pending):

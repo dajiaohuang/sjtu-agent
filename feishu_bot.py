@@ -818,7 +818,16 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                     return f"无效序号：{parts[2]}"
                 return "[homework] 正在获取摘要…\n\n" + run_homework_check(specific_idx=idx, brief=True)
             elif sub == "past":
-                return "[homework] 历史作业：\n\n" + run_homework_check(list_only=True, include_past=True)
+                # /hw past [do <idx>]
+                rest = parts[2] if len(parts) > 2 else ""
+                rest_parts = rest.split(maxsplit=1)
+                if rest_parts[0] == "do":
+                    try:
+                        idx = int(rest_parts[1])
+                    except (ValueError, IndexError):
+                        return "用法：/hw past do <序号>"
+                    return "[homework] 正在分析历史作业…\n\n" + run_homework_check(specific_idx=idx, include_past=True)
+                return run_homework_check(list_only=True, include_past=True)
             elif sub == "list":
                 return run_homework_check(list_only=True)
             elif sub == "due":
