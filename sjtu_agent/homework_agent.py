@@ -146,9 +146,14 @@ def _generate_pdf(title: str, md_text: str, output_path: Path) -> None:
         print(f"[homework] PDF 生成失败: {e}")
 
 
-def _generate_pdf_latex(title: str, md_text: str, output_path: Path, pdflatex_bin: str = "pdflatex") -> None:
-    """使用 pdflatex 生成 PDF（完美支持 LaTeX 公式和中文）。"""
+def _generate_pdf_latex(title: str, md_text: str, output_path: Path, _latex_bin: str = "") -> None:
+    """使用 xelatex 生成 PDF（原生 CJK + LaTeX 公式完美渲染）。"""
     import subprocess, tempfile
+    # 优先 xelatex（原生 Unicode），fallback pdflatex
+    _LATEX_BIN = _latex_bin or (
+        "C:/Users/Lenovo/AppData/Local/Programs/MiKTeX/miktex/bin/x64/xelatex.exe"
+        if Path("C:/Users/Lenovo/AppData/Local/Programs/MiKTeX/miktex/bin/x64/xelatex.exe").exists()
+        else _latex_bin)
     tex = r"""\documentclass[12pt,a4paper]{ctexart}
 \usepackage{amsmath,amssymb}
 \usepackage{geometry}\geometry{margin=2.5cm}
@@ -157,15 +162,16 @@ def _generate_pdf_latex(title: str, md_text: str, output_path: Path, pdflatex_bi
 \maketitle
 __BODY__
 \end{document}"""
-    # 转义 LaTeX 特殊字符，保留公式
-    body = md_text.replace("\\", "\\textbackslash ").replace("_", "\\_").replace("#", "\\#")
+    # 简单转义
+    body = md_text.replace("\\", "\\textbackslash{}").replace("_", "\\_").replace("#", "\\#")
     body = body.replace("&", "\\&").replace("%", "\\%").replace("{", "\\{").replace("}", "\\}")
-    # 恢复公式中的转义（$$...$$ 和 $...$ 内的不转义）
+    # 恢复公式
     for pat in [r"\$\$.*?\$\$", r"\$[^$]+\$"]:
         for m in re.finditer(pat, md_text):
-            escaped = m.group().replace("\\", "\\textbackslash ").replace("_", "\\_")
-            body = body.replace(escaped, m.group() if "$$" in m.group() else m.group())
-    # 加粗
+            orig = m.group()
+            esc = orig.replace("\\", "\\textbackslash{}").replace("_", "\\_")
+            body = body.replace(esc, orig, 1)
+    # Markdown 加粗
     body = re.sub(r"\*\*(.+?)\*\*", r"\\textbf{\1}", body)
     body = re.sub(r"\*(.+?)\*", r"\\textit{\1}", body)
     tex = tex.replace("__TITLE__", title).replace("__BODY__", body)
@@ -173,9 +179,9 @@ __BODY__
     tmpdir = tempfile.mkdtemp()
     tex_path = Path(tmpdir) / "solution.tex"
     tex_path.write_text(tex, encoding="utf-8")
-    for _ in range(2):  # 两次编译以生成目录/引用
+    for _ in range(2):
         subprocess.run(
-            [pdflatex_bin, "-interaction=nonstopmode", "-output-directory", tmpdir,
+            [_LATEX_BIN, "-interaction=nonstopmode", "-output-directory", tmpdir,
              str(tex_path)],
             capture_output=True, timeout=30,
         )
