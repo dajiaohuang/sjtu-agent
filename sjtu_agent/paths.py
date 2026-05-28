@@ -26,8 +26,16 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_ROOT.parent
 DATA_DIR = Path(os.environ.get("SJTU_AGENT_HOME", user_data_dir(APP_NAME)))
 LOG_DIR = DATA_DIR / "logs"
-
 ENV_PATH = DATA_DIR / ".env"
+
+# 加载 .env 以便自定义路径（如 SJTU_HOMEWORK_DIR）覆盖默认值
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ENV_PATH, override=False)
+except ImportError:
+    pass
+
+ASSIGNMENTS_DIR = Path(os.environ.get("SJTU_HOMEWORK_DIR", str(DATA_DIR / "assignments")))
 CONFIG_PATH = DATA_DIR / "config.json"
 AGENT_CONFIG_PATH = DATA_DIR / "agent_config.json"
 REMINDERS_PATH = DATA_DIR / "reminders.json"

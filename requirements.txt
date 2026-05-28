@@ -15,5 +15,7 @@ browser-use>=0.12.0 # my.sjtu.edu.cn 自动浏览
 langchain-openai>=0.3.0  # browser-use 使用的 LLM 接口
 pytelegrambotapi>=4.0
 lark-oapi>=1.4.0       # 飞书（Lark）官方 SDK
+python-docx>=1.0.0     # Word 文档读写（作业分析）
+fpdf2>=2.7.0           # PDF 生成（作业解答输出）
 httpx>=0.26.0          # 微信 ilink bot 协议 HTTP 客户端
 qrcode[pil]>=7.4       # 终端二维码生成（微信扫码登录）

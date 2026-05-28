@@ -135,7 +135,7 @@ def fetch_canvas(cfg: dict) -> list[dict]:
             r.raise_for_status()
         except requests.RequestException as e:
             print(f"[Canvas] 获取课程列表失败：{e}")
-            return []
+            raise  # 让上层调用者感知错误，而非静默返回空列表
         courses.extend(r.json())
         url = r.links.get("next", {}).get("url")
         params = {}
@@ -158,7 +158,7 @@ def fetch_canvas(cfg: dict) -> list[dict]:
                 r.raise_for_status()
             except requests.RequestException as e:
                 print(f"[Canvas] 获取 {cname} 作业失败：{e}")
-                break
+                raise
             for a in r.json():
                 if a.get("workflow_state") == "deleted":
                     continue

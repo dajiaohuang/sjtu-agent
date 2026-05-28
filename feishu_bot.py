@@ -186,6 +186,17 @@ _FS_CTX = (
     "- 表格请使用标准 Markdown 表格格式。\n"
     "- 不要在回复中给出本地文件路径或让用户在终端操作的指令。\n"
     "- 回复以中文为主，适当使用格式提升可读性。\n"
+    "\n"
+    "## 斜杠命令（用户输入 / 开头即可触发，主动引导使用）\n"
+    "遇到以下需求时，主动建议用户使用斜杠命令而非让 LLM 代劳：\n"
+    "- 做作业/写作业/作业答案/帮我做XX → /hw do <序号> 或先 /hw\n"
+    "- 查看作业/有什么作业 → /hw\n"
+    "- 作业摘要/作业要求 → /hw brief <序号>\n"
+    "- 开新话题/新对话/换个话题/聊点别的 → /new <名称>\n"
+    "- 切换对话/回到那个 → /switch <序号> 或 /list\n"
+    "- 查看帮助/有什么功能/怎么用 → /help\n"
+    "- 删除对话/清空聊天 → /delete <序号>\n"
+    "- 查看命令列表/所有命令 → /help\n"
 )
 
 
@@ -772,15 +783,56 @@ def _handle_commands(open_id: str, text: str) -> str | None:
         if cmd == "/help":
             return (
                 "**飞书 Bot 命令帮助**\n\n"
-                "`/new <名称>`  创建新对话并切换\n"
-                "`/list`  列出所有对话及其序号\n"
-                "`/switch <序号>`  切换活跃对话\n"
-                "`/name <序号> <名称>`  重命名对话\n"
+                "📂 对话管理\n"
+                "`/new <名称>`  创建新对话\n"
+                "`/list`  列出所有对话\n"
+                "`/switch <序号>`  切换对话\n"
+                "`/name <序号> <名称>`  重命名\n"
                 "`/delete <序号>`  删除对话\n"
-                "`/history`  查看当前对话最近消息\n"
-                "`/help`  显示此帮助"
+                "`/history`  查看最近消息\n\n"
+                "📝 作业助手\n"
+                "`/hw`  列出 Canvas 作业\n"
+                "`/hw do <序号>`  下载并完整解答\n"
+                "`/hw brief <序号>`  仅查看摘要\n"
+                "`/hw due <N>`  N 天内到期\n\n"
+                "ℹ️  `//help`  显示此帮助"
             )
+        if cmd == "/hw":
+            sub = parts[1] if len(parts) > 1 else ""
+            from sjtu_agent.homework_agent import run_homework_check
+            if sub == "do":
+                if len(parts) < 3:
+                    return "用法：/hw do <序号>"
+                try:
+                    idx = int(parts[2])
+                except ValueError:
+                    return f"无效序号：{parts[2]}"
+                return "[homework] 正在解题…\n\n" + run_homework_check(specific_idx=idx)
+            elif sub == "brief":
+                if len(parts) < 3:
+                    return "用法：/hw brief <序号>"
+                try:
+                    idx = int(parts[2])
+                except ValueError:
+                    return f"无效序号：{parts[2]}"
+                return "[homework] 正在获取摘要…\n\n" + run_homework_check(specific_idx=idx, brief=True)
+            elif sub == "list":
+                return run_homework_check(list_only=True)
+            elif sub == "due":
+                days = int(parts[2]) if len(parts) > 2 else 3
+                return run_homework_check(due_within_days=days, list_only=True)
+            elif sub == "all":
+                return "[homework] 正在分析全部作业…\n\n" + run_homework_check(due_within_days=3650)
+            else:
+                return run_homework_check(list_only=True)
         return f"未知命令：{cmd}。输入 /help 查看可用命令。"
+
+
+def _process_hw_command(sender_open_id: str, message_id: str, text: str) -> None:
+    """后台执行 /hw 命令（网络 I/O + LLM，避免阻塞 event loop）。"""
+    result = _handle_commands(sender_open_id, text)
+    if result:
+        _reply_text(message_id, result)
 
 
 def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
@@ -845,6 +897,13 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
             return
 
         # ── 多对话命令拦截 ──────────────────────────────────────────
+        # /hw 系列是重命令（网络 I/O + LLM），放到后台线程避免阻塞 event loop
+        if text.strip().lower().startswith("/hw"):
+            print(f"[feishu] 命令（后台执行）: {text[:40]!r}")
+            _reply_text(message_id, "[homework] 正在处理，请稍候…")
+            _EXECUTOR.submit(_process_hw_command, sender_open_id, message_id, text)
+            return
+
         cmd_result = _handle_commands(sender_open_id, text)
         if cmd_result is not None:
             print(f"[feishu] 命令: {text[:40]!r}")

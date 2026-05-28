@@ -37,6 +37,12 @@ _SERVICE_SPECS = {
         "log": "noon_report.task.log",
         "schedule": "daily",
     },
+    "homework-check": {
+        "task_name": f"{_TASK_PREFIX}-HomeworkCheck",
+        "subcommand": "daily-report --type evening",  # placeholder, runs homework_agent
+        "log": "homework_check.task.log",
+        "schedule": "daily",
+    },
     "remind-check": {
         "task_name": f"{_TASK_PREFIX}-RemindCheck",
         "subcommand": "remind-check",
