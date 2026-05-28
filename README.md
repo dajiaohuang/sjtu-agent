@@ -119,65 +119,44 @@ sjtu-agent setup --yes --skip-cookie-import --skip-launchd
 sjtu-agent setup --yes --write-daemons-only --output-dir /tmp/sjtu-agent-launchd
 ```
 
-## MCP and Skills
+## MCP 与技能扩展
 
-Agent can expose its own tools as an MCP server, and it can also load external MCP servers as extra tools. External MCP server config lives in `config.json` under `mcp_servers`; enabled prompt-only skills live under `skills.enabled`.
+Agent 既可将自身工具作为 MCP Server 暴露，也可加载外部 MCP Server 作为额外工具。外部 MCP Server 配置保存在 `config.json` 的 `mcp_servers` 字段中；已启用的 prompt-only 技能保存在 `skills.enabled` 字段中。
 
-Disclosure: the optional Shuiyuan MCP integration installs
-[dajiaohuang/shuiyuan-mcp](https://github.com/dajiaohuang/shuiyuan-mcp), which is
-maintained by the PR author of this integration. The setup command pins the
-checkout to a known commit by default instead of silently pulling future changes
-into the agent trust domain.
+声明：可选的水源 MCP 集成会安装 [dajiaohuang/shuiyuan-mcp](https://github.com/dajiaohuang/shuiyuan-mcp)，该项目由本集成 PR 的作者维护。安装命令默认将检出固定到已知 commit，而非静默拉取未来变更。
 
-Disclosure: the optional YKST/Treehole MCP integration installs
-[dajiaohuang/ykst-treehole-mcp](https://github.com/dajiaohuang/ykst-treehole-mcp),
-which is also maintained by the PR author of this integration. The setup command
-pins the checkout to a known commit by default. Treehole write operations exposed
-by that MCP require `confirm: true` after the intended action is reviewed.
+声明：可选的 YKST/树洞 MCP 集成会安装 [dajiaohuang/ykst-treehole-mcp](https://github.com/dajiaohuang/ykst-treehole-mcp)，同样由本集成 PR 的作者维护。安装命令默认将检出固定到已知 commit。该 MCP 暴露的树洞写操作需在审核操作内容后传入 `confirm: true`。
 
-Install and enable Shuiyuan MCP:
+安装并启用水源 MCP：
 
 ```bash
 sjtu-agent setup-shuiyuan-mcp
 ```
 
-You can also trigger the same setup from the chat agent by asking it to
-"install Shuiyuan MCP", "enable Shuiyuan MCP", or "load dajiaohuang/shuiyuan-mcp".
-The first chat-triggered call will only warn that this installs an external
-GitHub repository and ask for confirmation; installation starts only after the
-user explicitly confirms.
+也可在对话中对 Agent 说「安装水源 MCP」「启用 Shuiyuan MCP」或「加载 dajiaohuang/shuiyuan-mcp」触发相同安装流程。首次对话触发调用仅会提示此操作将安装外部 GitHub 仓库并请求确认；用户明确确认后才开始安装。
 
-This pulls and builds [dajiaohuang/shuiyuan-mcp](https://github.com/dajiaohuang/shuiyuan-mcp), registers it as the `shuiyuan` MCP server, and enables the bundled `shuiyuan-mcp` skill. If the MCP server later reports a missing profile/cookie, run the `login_command` printed by the setup command once.
+此命令会拉取并构建 [dajiaohuang/shuiyuan-mcp](https://github.com/dajiaohuang/shuiyuan-mcp)，注册为 `shuiyuan` MCP Server，并启用内置的 `shuiyuan-mcp` 技能。若 MCP Server 后续提示缺少 profile/cookie，运行安装命令打印的 `login_command` 一次即可。
 
-Install and enable YKST/Treehole MCP:
+安装并启用 YKST/树洞 MCP：
 
 ```bash
 sjtu-agent setup-ykst-mcp
 ```
 
-You can also trigger it from chat by asking to "install YKST MCP", "enable
-Treehole MCP", or "load dajiaohuang/ykst-treehole-mcp". The first chat-triggered
-call only warns that this installs an external GitHub repository and may run a
-local browser-login helper; installation starts only after explicit
-confirmation.
+也可在对话中对 Agent 说「安装 YKST MCP」「启用树洞 MCP」或「加载 dajiaohuang/ykst-treehole-mcp」触发。首次对话触发调用仅会提示此操作将安装外部 GitHub 仓库并可能运行本地浏览器登录辅助工具；用户明确确认后才开始安装。
 
-This pulls [dajiaohuang/ykst-treehole-mcp](https://github.com/dajiaohuang/ykst-treehole-mcp),
-installs dependencies, registers it as the `ykst` MCP server, and enables the
-bundled `ykst-mcp` skill. If the MCP server later reports a missing session, run
-the `login_command` printed by the setup command once.
+此命令会拉取 [dajiaohuang/ykst-treehole-mcp](https://github.com/dajiaohuang/ykst-treehole-mcp)，安装依赖，注册为 `ykst` MCP Server，并启用内置的 `ykst-mcp` 技能。若 MCP Server 后续提示缺少 session，运行安装命令打印的 `login_command` 一次即可。
 
-Add any custom MCP server:
+添加自定义 MCP Server：
 
 ```bash
 sjtu-agent add-mcp-server my-tools --transport stdio --command python --arg D:/path/to/server.py
 sjtu-agent add-mcp-server remote-tools --transport sse --url http://127.0.0.1:8765/sse
 ```
 
-You can also ask the chat agent to "add a custom MCP server". The first
-chat-triggered call only warns that an external command or URL will be trusted;
-the agent should proceed only after explicit confirmation.
+也可在对话中让 Agent「添加自定义 MCP Server」。首次对话触发调用仅会提示将信任外部命令或 URL；Agent 在用户明确确认后才继续。
 
-Add a custom prompt-only skill:
+添加自定义 prompt-only 技能：
 
 ```bash
 sjtu-agent add-skill my-skill --content-file D:/path/to/SKILL.md
@@ -185,14 +164,9 @@ sjtu-agent list-skills
 sjtu-agent manage-skill disable my-skill
 ```
 
-You can also ask the chat agent to add a skill and provide either the full
-`SKILL.md` content or a local source file path.
+也可在对话中让 Agent 添加技能，并提供完整的 `SKILL.md` 内容或本地文件路径。
 
-For a more agent-native flow, ask the chat agent to "create a skill" and
-describe the behavior you want. If the requirement is not clear enough, the
-agent asks follow-up questions; once it has a name, trigger, and instructions it
-uses `create_skill`. You can also ask it to list, enable, disable, or delete
-skills through `list_skills` and `manage_skill`.
+如需更原生的 Agent 流程，可对 Agent 说「创建一个技能」并描述想要的行为。若需求不够明确，Agent 会追问补充信息；获得名称、触发条件和指令后，Agent 会通过 `create_skill` 创建技能。也可以通过 `list_skills` 和 `manage_skill` 列出、启用、禁用或删除技能。
 
 ## macOS 后台服务
 
