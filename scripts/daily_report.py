@@ -178,14 +178,15 @@ def _get_news() -> str:
         return ""
 
 
-def _collect_data() -> dict:
+def _collect_data(report_type: str = "evening") -> dict:
     """并行收集各平台数据，任何单项失败不影响其他项。"""
     import concurrent.futures as cf
 
+    date_arg = "明天" if report_type == "evening" else "今天"
     results = {}
     tasks = {
         "ddls":     lambda: agent.tool_get_ddls(),
-        "schedule": lambda: agent.tool_get_schedule(query_type="day", date="今天"),
+        "schedule": lambda: agent.tool_get_schedule(query_type="day", date=date_arg),
         "lab":      lambda: agent.tool_get_next_lab(),
         "jwc":      lambda: agent.tool_search_campus("通知 公告", sites=["jwc"], max_results=4),
         "news":     lambda: _get_news(),
@@ -221,13 +222,30 @@ def build_report(report_type: str = "evening") -> str:
         label = "晚间学习日报"
 
     print("[daily_report] 正在收集数据…")
-    data = _collect_data()
+    data = _collect_data(report_type)
 
     # --- 拆解 DDL ---
     all_ddls = (data.get("ddls") or {}).get("ddls", [])
     today_ddls = [d for d in all_ddls if not d["expired"] and d["hours_left"] <= 24]
     week_ddls  = [d for d in all_ddls if not d["expired"] and 24 < d["hours_left"] <= 7 * 24]
     far_ddls   = [d for d in all_ddls if not d["expired"] and d["hours_left"] > 7 * 24]
+
+    schedule_raw = data.get("schedule")
+    lab_raw      = data.get("lab")
+    jwc_raw      = data.get("jwc")
+    news_raw     = data.get("news", "") or ""
+
+    # 午报：过滤掉上午已结束的课程（第 1-4 节，11:40 前结束）
+    noon_has_remaining = True
+    if report_type == "noon" and schedule_raw and isinstance(schedule_raw, dict):
+        courses = schedule_raw.get("courses", [])
+        if courses:
+            afternoon = [c for c in courses if c.get("slot_start", 0) >= 5]
+            noon_has_remaining = len(afternoon) > 0
+            schedule_raw = {**schedule_raw, "courses": afternoon}
+
+    # 确定课表标签
+    schedule_day_label = "明日" if report_type == "evening" else "今日"
 
     # --- 构建给 AI 的数据上下文 ---
     def _fmt_ddl(d):
@@ -243,11 +261,6 @@ def build_report(report_type: str = "evening") -> str:
 
     ddl_section = "\n".join(_fmt_ddl(d) for d in all_ddls) if all_ddls else "（所有作业均已完成或无作业）"
 
-    schedule_raw = data.get("schedule")
-    lab_raw      = data.get("lab")
-    jwc_raw      = data.get("jwc")
-    news_raw     = data.get("news", "") or ""
-
     # 从 schedule 提取课程列表文字
     def _fmt_schedule(s):
         if not s:
@@ -261,7 +274,9 @@ def build_report(report_type: str = "evening") -> str:
                 t = c.get("time_str") or c.get("time") or ""
                 room = c.get("room") or c.get("location") or ""
                 lines.append(f"{t} {c.get('name','未知课程')} @ {room}".strip())
-            return "\n".join(lines) if lines else "（今日无课）"
+            return "\n".join(lines) if lines else f"（{schedule_day_label}无课）"
+        if report_type == "noon" and isinstance(s, dict) and not noon_has_remaining:
+            return "（上午课程已结束，下午及晚间无课）"
         # fallback: 直接 JSON
         return json.dumps(s, ensure_ascii=False)
 
@@ -287,6 +302,7 @@ def build_report(report_type: str = "evening") -> str:
                 lines.append(f"  {url}")
         return "\n".join(lines)
 
+    schedule_section_label = "明日课表" if report_type == "evening" else "今日课表"
     data_ctx = f"""当前时间：{date_str} {now.strftime('%H:%M')}
 
 【DDL 汇总（共 {len(all_ddls)} 项未完成）】
@@ -299,7 +315,7 @@ def build_report(report_type: str = "evening") -> str:
 更远期（{len(far_ddls)} 项）：
 {chr(10).join(_fmt_ddl(d) for d in far_ddls) or "（无）"}
 
-【今日课表】
+【{schedule_section_label}】
 {_fmt_schedule(schedule_raw)}
 
 【下次物理实验】
@@ -315,10 +331,11 @@ def build_report(report_type: str = "evening") -> str:
 
     _type_hints = {
         "morning": "今日课程安排+今日截止DDL+晨间行动建议（如：早上有什么课、今天要交什么）",
-        "noon":   "下午课程安排+临近DDL提醒+午间行动建议（如：下午有什么课、明天截止的作业）",
-        "evening": "今日总结+明日预告+晚间行动建议（如：今天完成了什么、明天要准备什么）",
+        "noon":   "下午及晚间课程安排+临近DDL提醒+午间行动建议（如：下午有什么课、明天截止的作业；上午课程已结束无需再提）",
+        "evening": "今日总结+明日课程预告+晚间行动建议（如：今天完成了什么、明天有什么课、要准备什么）",
     }
     hint = _type_hints.get(report_type, _type_hints["evening"])
+    schedule_prompt_header = "明日课程" if report_type == "evening" else "今日课程"
     prompt = f"""你是一个贴心的学习助手，请根据以下数据为上海交通大学学生生成一份{label}。
 
 要求：
@@ -332,7 +349,7 @@ def build_report(report_type: str = "evening") -> str:
 
 然后依次输出以下几节（每节空一行）：
 📚 <b>作业 DDL</b>：列出今日/本周截止任务（如无则写"暂无紧急 DDL ✅"）；每条注明距截止时间
-📅 <b>今日课程</b>：课程名+时间（如无课则写"今日无课"）
+📅 <b>{schedule_prompt_header}</b>：课程名+时间（如无课则写"无课"）
 🔬 <b>下次实验</b>：时间、地点（如无则写"暂无安排"）
 📢 <b>教务通知</b>：最多2条关键通知摘要（如无则写"暂无新通知"）
 📰 <b>校园动态</b>：从校园新闻中选取1-2条最相关或有趣的摘要（如无则写"暂无"）
@@ -374,12 +391,15 @@ def build_report(report_type: str = "evening") -> str:
 
     except Exception as e:
         print(f"[daily_report] AI 生成失败，降级为纯文本模式: {e}")
+        fallback_schedule_label = "明日课程" if report_type == "evening" else "今日课程"
         return _fallback_report(date_str, today_ddls, week_ddls, far_ddls,
-                                _fmt_schedule(schedule_raw), _fmt_lab(lab_raw), _fmt_jwc(jwc_raw))
+                                _fmt_schedule(schedule_raw), _fmt_lab(lab_raw), _fmt_jwc(jwc_raw),
+                                fallback_schedule_label)
 
 
 def _fallback_report(date_str, today_ddls, week_ddls, far_ddls,
-                     schedule_txt, lab_txt, jwc_txt) -> str:
+                     schedule_txt, lab_txt, jwc_txt,
+                     schedule_label: str = "今日课程") -> str:
     """AI 不可用时的纯文本降级汇报。"""
     lines = [f"📊 <b>{date_str} 学习日报</b>\n"]
 
@@ -393,7 +413,7 @@ def _fallback_report(date_str, today_ddls, week_ddls, far_ddls,
     if not today_ddls and not week_ddls:
         lines.append("暂无7天内截止任务 ✅")
 
-    lines.append(f"\n📅 <b>今日课程</b>\n{schedule_txt}")
+    lines.append(f"\n📅 <b>{schedule_label}</b>\n{schedule_txt}")
     lines.append(f"\n🔬 <b>下次实验</b>\n{lab_txt}")
     lines.append(f"\n📢 <b>教务通知</b>\n{jwc_txt}")
     return "\n".join(lines)

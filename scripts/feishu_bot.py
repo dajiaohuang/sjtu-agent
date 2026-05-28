@@ -181,7 +181,7 @@ def _get_active_conv(open_id: str) -> tuple[dict, dict, threading.Lock]:
 _FS_CTX = (
     "\n\n## 当前运行环境：飞书 Bot\n"
     "你正在通过飞书（Lark）与用户交互：\n"
-    "- 支持 Markdown 格式：**加粗**、*斜体*、`代码`、链接、列表、表格均可正常使用。\n"
+    "- 支持 Markdown 格式：**加粗**、*斜体*、`代码`、链接、列表、表格均可正常使用。**不要使用 # 号标题（如 # 标题、## 标题），请用粗体文字或 emoji 作为段落标题。**\n"
     "- 代码块用三个反引号包裹并标注语言。\n"
     "- 表格请使用标准 Markdown 表格格式。\n"
     "- 不要在回复中给出本地文件路径或让用户在终端操作的指令。\n"
@@ -197,6 +197,10 @@ _FS_CTX = (
     "- 查看帮助/有什么功能/怎么用 → /help\n"
     "- 删除对话/清空聊天 → /delete <序号>\n"
     "- 查看命令列表/所有命令 → /help\n"
+    "\n"
+    "## 主动引导\n"
+    "当用户问「你能做什么」「有什么功能」「怎么用」时，在回复中主动列出可用的斜杠命令，"
+    "并特别提及 /hw 作业解答功能（近期更新，可调用 Claude Code 自动解题）。\n"
 )
 
 
@@ -396,7 +400,7 @@ def _build_post_content(md_text: str) -> _PostContent:
             continue
 
         # 标题 → 去掉 # 前缀，内联解析后整体加粗
-        header_match = re.match(r"^(#{1,3})\s+(.+)$", stripped)
+        header_match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
         if header_match:
             text = header_match.group(2)
             h_elements = _parse_inline(text)
@@ -795,7 +799,9 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 "`/hw do <序号>`  下载并完整解答\n"
                 "`/hw brief <序号>`  仅查看摘要\n"
                 "`/hw due <N>`  N 天内到期\n"
-                "`/hw past`  查看历史作业\n\n"
+                "`/hw past`  查看历史作业\n"
+                "`/hw all`  分析全部作业\n"
+                "`/hw list`  列出作业（同 /hw）\n\n"
                 "ℹ️  `//help`  显示此帮助"
             )
         if cmd == "/hw":
