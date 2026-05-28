@@ -37,3 +37,7 @@ com.sjtu.*.plist
 
 # Session summaries
 sessions/
+
+# YKST / TreeHole generated files
+.treehole-session.json
+.tmp-chrome-login/

@@ -226,6 +226,47 @@ def _cmd_login(args: argparse.Namespace) -> int:
     return _run_module("login", args.script_args)
 
 
+def _cmd_ykst_login(args: argparse.Namespace) -> int:
+    from sjtu_agent import ykst_client
+
+    if args.callback_url or args.code:
+        result = (
+            ykst_client.login_with_callback_url(args.callback_url)
+            if args.callback_url
+            else ykst_client.login_with_code(args.code)
+        )
+        print_json(result)
+        return 0
+
+    if not args.no_browser:
+        try:
+            result = ykst_client.login_with_browser_watch(
+                args.redirect_uri or ykst_client.DEFAULT_REDIRECT_URI,
+            )
+            print_json(result)
+            return 0
+        except Exception as e:
+            print_json({"error": str(e), "fallback": "manual"})
+
+    info = ykst_client.get_login_url(args.redirect_uri or ykst_client.DEFAULT_REDIRECT_URI)
+    opened_browser = False
+    if not args.no_browser:
+        try:
+            import webbrowser
+
+            opened_browser = bool(webbrowser.open(info["loginUrl"]))
+        except Exception:
+            opened_browser = False
+    print_json({
+        "login_url": info["loginUrl"],
+        "opened_browser": opened_browser,
+        "next_action": (
+            "After JAccount login, rerun with --callback-url '<full callback URL>' or --code '<code>'."
+        ),
+    })
+    return 0
+
+
 def _cmd_ddl(args: argparse.Namespace) -> int:
     return _run_module("ddl_checker", args.script_args)
 
@@ -340,6 +381,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_passthrough_parser(subparsers, "chat", "start interactive chat mode", _cmd_chat)
     _add_passthrough_parser(subparsers, "setup-config", "build config.json from browser cookies", _cmd_setup_config)
     _add_passthrough_parser(subparsers, "login", "refresh platform cookies with Playwright", _cmd_login)
+    ykst_login = subparsers.add_parser("ykst-login", help="configure native YKST/TreeHole login")
+    ykst_login.add_argument("--callback-url", default="", help="full OAuth callback URL copied from the browser")
+    ykst_login.add_argument("--code", default="", help="raw OAuth code from the callback URL")
+    ykst_login.add_argument("--redirect-uri", default="", help="OAuth redirect URI override")
+    ykst_login.add_argument("--no-browser", action="store_true", help="print the login URL without opening a browser")
+    ykst_login.set_defaults(func=_cmd_ykst_login)
     _add_passthrough_parser(subparsers, "ddl", "run the DDL checker report", _cmd_ddl)
     daily_rpt = subparsers.add_parser("daily-report", help="generate or send the daily report")
     daily_rpt.add_argument("--type", choices=["morning", "noon", "evening"],

@@ -105,6 +105,241 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "setup_ykst",
+            "description": (
+                "Start native YKST/TreeHole login. Automatically opens Chrome, watches for the OAuth callback URL, "
+                "and saves the session token — no manual copy/paste needed. Falls back to returning the login URL "
+                "if Chrome is unavailable. Call when the user says '配置树洞', '登录树洞', '配置 YKST', or 'setup treehole'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "redirect_uri": {
+                        "type": "string",
+                        "description": "OAuth redirect URI; leave empty for https://web.treehole.space/auth/jaccount.",
+                    },
+                    "open_browser": {
+                        "type": "boolean",
+                        "description": "Whether to open the login URL in the default browser. Default true.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_login_with_callback",
+            "description": "Complete YKST/TreeHole login by exchanging either the callback URL containing ?code=... or a raw OAuth code, then save the session token locally.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "callback_url": {"type": "string", "description": "Full callback URL copied from the browser after JAccount login."},
+                    "code": {"type": "string", "description": "Raw OAuth code if the user only provides the code query parameter."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_save_session_token",
+            "description": "Manual fallback: save a YKST/TreeHole session token to local config.json.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "token": {"type": "string", "description": "YKST/TreeHole session token."},
+                    "host": {"type": "string", "description": "Optional RPC host. Default https://proxy.treehole.qaq.ac.cn."},
+                },
+                "required": ["token"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_auth_status",
+            "description": "Check native YKST/TreeHole authentication status and configured RPC host.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_get_profile",
+            "description": "Read the current YKST/TreeHole account profile and identities.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_list_identities",
+            "description": "List YKST/TreeHole identities for the logged-in account, including the active identity.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_get_identity",
+            "description": "Get one YKST/TreeHole identity by identity id, identity code, or active=true.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "identity_id": {"type": "integer"},
+                    "code": {"type": "string"},
+                    "active": {"type": "boolean"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_set_active_identity",
+            "description": "Switch the active YKST/TreeHole identity. Requires confirm=true because it changes account state.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "identity_id": {"type": "integer", "description": "Target identity id."},
+                    "confirm": {"type": "boolean", "description": "Must be true after explicit user confirmation."},
+                },
+                "required": ["identity_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_search_threads",
+            "description": "Search YKST/TreeHole threads by keyword.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string"},
+                    "limit": {"type": "integer", "description": "1-50, default 20."},
+                    "offset": {"type": "integer", "description": "Pagination offset, default 0."},
+                },
+                "required": ["keyword"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_get_thread",
+            "description": "Read one YKST/TreeHole thread by thread id.",
+            "parameters": {
+                "type": "object",
+                "properties": {"thread_id": {"type": "integer"}},
+                "required": ["thread_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_get_post",
+            "description": "Read one YKST/TreeHole post/reply by post id.",
+            "parameters": {
+                "type": "object",
+                "properties": {"post_id": {"type": "integer"}},
+                "required": ["post_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_get_thread_posts",
+            "description": "Read replies/posts in a YKST/TreeHole thread.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thread_id": {"type": "integer"},
+                    "limit": {"type": "integer", "description": "1-50, default 15."},
+                    "cursor": {"type": "integer", "description": "Last floor cursor, default 0."},
+                    "top": {"type": "integer", "description": "Top floor, default 0."},
+                    "only_author": {"type": "boolean", "description": "Only show author posts."},
+                },
+                "required": ["thread_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_reply_thread",
+            "description": "Reply to a YKST/TreeHole thread with the active identity. Requires confirm=true after showing the draft.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thread_id": {"type": "integer"},
+                    "content": {"type": "string"},
+                    "hide_identity": {"type": "boolean"},
+                    "reply_to_post_id": {"type": "integer"},
+                    "user_thread_identity_id": {"type": "integer"},
+                    "confirm": {"type": "boolean", "description": "Must be true after explicit user confirmation."},
+                },
+                "required": ["thread_id", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_rate_thread",
+            "description": "Like, hate/dislike, or clear rating on a YKST/TreeHole thread. Requires confirm=true.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thread_id": {"type": "integer"},
+                    "type": {"type": "string", "enum": ["like", "hate", "normal"]},
+                    "confirm": {"type": "boolean", "description": "Must be true after explicit user confirmation."},
+                },
+                "required": ["thread_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_rate_post",
+            "description": "Like, hate/dislike, or clear rating on a YKST/TreeHole post/reply. Requires confirm=true.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "post_id": {"type": "integer"},
+                    "type": {"type": "string", "enum": ["like", "hate", "normal"]},
+                    "confirm": {"type": "boolean", "description": "Must be true after explicit user confirmation."},
+                },
+                "required": ["post_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ykst_favorite_thread",
+            "description": "Favorite or unfavorite a YKST/TreeHole thread. Requires confirm=true.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thread_id": {"type": "integer"},
+                    "is_fav": {"type": "boolean", "description": "true=favorite, false=unfavorite. Default true."},
+                    "confirm": {"type": "boolean", "description": "Must be true after explicit user confirmation."},
+                },
+                "required": ["thread_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "setup_course_community",
             "description": (
                 "登录选课社区 course.sjtu.plus 并保存 session cookie（首选邮箱密码登录端点）。"
@@ -1578,6 +1813,19 @@ def tool_check_setup() -> dict:
             "has_api_key": bool(cfg.get("shuiyuan_user_api_key")),
             "has_cookies": bool(cfg.get("shuiyuan_cookies")),
         },
+        "ykst": {
+            "has_token": bool(
+                os.environ.get("TREEHOLE_SESSION")
+                or os.environ.get("TREEHOLE_TOKEN")
+                or cfg.get("ykst_treehole_token")
+            ),
+            "host": (
+                os.environ.get("TREEHOLE_RPC_HOST")
+                or cfg.get("ykst_treehole_host")
+                or "https://proxy.treehole.qaq.ac.cn"
+            ),
+            "setup_tool": "setup_ykst",
+        },
         "course_community": {
             "has_cookies": bool(cfg.get("course_sjtu_cookies")),
         },
@@ -1743,6 +1991,210 @@ def _setup_shuiyuan_session(cfg: dict, username: str, password: str) -> dict:
     cfg["shuiyuan_cookies"] = new_session
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
     return {"success": True, "message": f"水源社区 session 登录成功（需定期更新）"}
+
+
+# ── YKST / TreeHole native client ───────────────────────────────────────────
+
+def _ykst_confirmation(action: str, payload: dict) -> dict:
+    return {
+        "requires_confirmation": True,
+        "action": action,
+        "payload": payload,
+        "next_action": "请把即将执行的树洞操作展示给用户；用户明确确认后，再用 confirm=true 重新调用该工具。",
+    }
+
+
+def tool_setup_ykst(redirect_uri: str = "", open_browser: bool = True) -> dict:
+    """Start the native YKST OAuth login flow and return the login URL."""
+    from sjtu_agent import ykst_client
+
+    if open_browser:
+        try:
+            result = ykst_client.login_with_browser_watch(
+                redirect_uri or ykst_client.DEFAULT_REDIRECT_URI,
+            )
+            return {
+                "success": True,
+                "authenticated": True,
+                "auto_captured": True,
+                "host": result.get("host"),
+                "token_hint": result.get("token_hint"),
+            }
+        except Exception:
+            pass
+
+    try:
+        info = ykst_client.get_login_url(redirect_uri or ykst_client.DEFAULT_REDIRECT_URI)
+    except Exception as e:
+        return {"error": f"获取树洞登录 URL 失败：{e}"}
+
+    opened_browser = False
+    if open_browser:
+        try:
+            import webbrowser
+
+            opened_browser = bool(webbrowser.open(info["loginUrl"]))
+        except Exception:
+            opened_browser = False
+
+    return {
+        "success": True,
+        "opened_browser": opened_browser,
+        "login_url": info["loginUrl"],
+        "redirect_uri": info["redirectUri"],
+        "next_action": (
+            "请在浏览器中用 jAccount 登录树洞；跳转到回调页后，复制浏览器地址栏完整 URL 发给我，"
+            "我会调用 ykst_login_with_callback 保存登录态。"
+        ),
+    }
+
+
+def tool_ykst_login_with_callback(callback_url: str = "", code: str = "") -> dict:
+    """Exchange a YKST OAuth callback URL/code for a local session token."""
+    from sjtu_agent import ykst_client
+
+    try:
+        if callback_url:
+            return ykst_client.login_with_callback_url(callback_url)
+        if code:
+            return ykst_client.login_with_code(code)
+        return {"error": "需要提供 callback_url 或 code"}
+    except Exception as e:
+        return {"error": f"树洞登录失败：{e}"}
+
+
+def tool_ykst_save_session_token(token: str, host: str = "") -> dict:
+    """Manual fallback for saving a YKST session token."""
+    from sjtu_agent import ykst_client
+
+    try:
+        return ykst_client.save_session_token(token, host or None)
+    except Exception as e:
+        return {"error": f"保存树洞登录态失败：{e}"}
+
+
+def tool_ykst_auth_status() -> dict:
+    from sjtu_agent import ykst_client
+
+    return ykst_client.auth_status()
+
+
+def tool_ykst_get_profile() -> dict:
+    from sjtu_agent import ykst_client
+
+    return ykst_client.profile()
+
+
+def tool_ykst_list_identities() -> dict:
+    from sjtu_agent import ykst_client
+
+    return ykst_client.list_identities()
+
+
+def tool_ykst_get_identity(identity_id: int | None = None, code: str = "", active: bool = False) -> dict:
+    from sjtu_agent import ykst_client
+
+    return ykst_client.get_identity(identity_id=identity_id, code=code or None, active=active)
+
+
+def tool_ykst_set_active_identity(identity_id: int, confirm: bool = False) -> dict:
+    from sjtu_agent import ykst_client
+
+    payload = {"identity_id": identity_id}
+    if not confirm:
+        return _ykst_confirmation("set_active_identity", payload)
+    return ykst_client.set_active_identity(identity_id)
+
+
+def tool_ykst_search_threads(keyword: str, limit: int = 20, offset: int = 0) -> dict:
+    from sjtu_agent import ykst_client
+
+    return ykst_client.search_threads(keyword, limit=limit, offset=offset)
+
+
+def tool_ykst_get_thread(thread_id: int) -> dict:
+    from sjtu_agent import ykst_client
+
+    return ykst_client.get_thread(thread_id)
+
+
+def tool_ykst_get_post(post_id: int) -> dict:
+    from sjtu_agent import ykst_client
+
+    return ykst_client.get_post(post_id)
+
+
+def tool_ykst_get_thread_posts(
+    thread_id: int,
+    limit: int = 15,
+    cursor: int = 0,
+    top: int = 0,
+    only_author: bool = False,
+) -> dict:
+    from sjtu_agent import ykst_client
+
+    return ykst_client.get_thread_posts(
+        thread_id,
+        limit=limit,
+        cursor=cursor,
+        top=top,
+        only_author=only_author,
+    )
+
+
+def tool_ykst_reply_thread(
+    thread_id: int,
+    content: str,
+    hide_identity: bool = False,
+    reply_to_post_id: int | None = None,
+    user_thread_identity_id: int | None = None,
+    confirm: bool = False,
+) -> dict:
+    from sjtu_agent import ykst_client
+
+    payload = {
+        "thread_id": thread_id,
+        "content": content,
+        "hide_identity": hide_identity,
+        "reply_to_post_id": reply_to_post_id,
+        "user_thread_identity_id": user_thread_identity_id,
+    }
+    if not confirm:
+        return _ykst_confirmation("reply_thread", payload)
+    return ykst_client.reply_thread(
+        thread_id,
+        content,
+        hide_identity=hide_identity,
+        reply_to_post_id=reply_to_post_id,
+        user_thread_identity_id=user_thread_identity_id,
+    )
+
+
+def tool_ykst_rate_thread(thread_id: int, type: str = "like", confirm: bool = False) -> dict:
+    from sjtu_agent import ykst_client
+
+    payload = {"thread_id": thread_id, "type": type or "like"}
+    if not confirm:
+        return _ykst_confirmation("rate_thread", payload)
+    return ykst_client.rate_thread(thread_id, type or "like")
+
+
+def tool_ykst_rate_post(post_id: int, type: str = "like", confirm: bool = False) -> dict:
+    from sjtu_agent import ykst_client
+
+    payload = {"post_id": post_id, "type": type or "like"}
+    if not confirm:
+        return _ykst_confirmation("rate_post", payload)
+    return ykst_client.rate_post(post_id, type or "like")
+
+
+def tool_ykst_favorite_thread(thread_id: int, is_fav: bool = True, confirm: bool = False) -> dict:
+    from sjtu_agent import ykst_client
+
+    payload = {"thread_id": thread_id, "is_fav": is_fav}
+    if not confirm:
+        return _ykst_confirmation("favorite_thread", payload)
+    return ykst_client.favorite_thread(thread_id, is_fav=is_fav)
 
 
 # ── 选课社区 course.sjtu.plus ────────────────────────────────────────────────
@@ -4117,6 +4569,22 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "read_shuiyuan_topic":   r = tool_read_shuiyuan_topic(**args)
         elif name == "get_schedule":          r = tool_get_schedule(**args)
         elif name == "setup_shuiyuan":        r = tool_setup_shuiyuan()
+        elif name == "setup_ykst":            r = tool_setup_ykst(**args)
+        elif name == "ykst_login_with_callback": r = tool_ykst_login_with_callback(**args)
+        elif name == "ykst_save_session_token":  r = tool_ykst_save_session_token(**args)
+        elif name == "ykst_auth_status":         r = tool_ykst_auth_status()
+        elif name == "ykst_get_profile":         r = tool_ykst_get_profile()
+        elif name == "ykst_list_identities":     r = tool_ykst_list_identities()
+        elif name == "ykst_get_identity":        r = tool_ykst_get_identity(**args)
+        elif name == "ykst_set_active_identity": r = tool_ykst_set_active_identity(**args)
+        elif name == "ykst_search_threads":      r = tool_ykst_search_threads(**args)
+        elif name == "ykst_get_thread":          r = tool_ykst_get_thread(**args)
+        elif name == "ykst_get_post":            r = tool_ykst_get_post(**args)
+        elif name == "ykst_get_thread_posts":    r = tool_ykst_get_thread_posts(**args)
+        elif name == "ykst_reply_thread":        r = tool_ykst_reply_thread(**args)
+        elif name == "ykst_rate_thread":         r = tool_ykst_rate_thread(**args)
+        elif name == "ykst_rate_post":           r = tool_ykst_rate_post(**args)
+        elif name == "ykst_favorite_thread":     r = tool_ykst_favorite_thread(**args)
         elif name == "setup_course_community": r = tool_setup_course_community(**args)
         elif name == "search_courses":        r = tool_search_courses(**args)
         elif name == "get_course_detail":     r = tool_get_course_detail(**args)

@@ -215,6 +215,20 @@ class ConfigStore:
     def shuiyuan_cookies(self) -> dict:
         return self.get("shuiyuan_cookies", {})
 
+    @property
+    def ykst_treehole_token(self) -> str:
+        return (
+            os.environ.get("TREEHOLE_SESSION")
+            or os.environ.get("TREEHOLE_TOKEN")
+            or self.get("ykst_treehole_token", "")
+        ).strip()
+
+    @property
+    def ykst_treehole_host(self) -> str:
+        return (
+            os.environ.get("TREEHOLE_RPC_HOST")
+            or self.get("ykst_treehole_host", "https://proxy.treehole.qaq.ac.cn")
+        ).strip()
     # ── 推送渠道开关 ────────────────────────────────────────────────────
     @property
     def telegram_enabled(self) -> bool:

@@ -92,6 +92,7 @@ sjtu-agent                # 启动主对话
 sjtu-agent setup          # 运行首次配置向导
 sjtu-agent doctor         # 查看当前配置状态和运行时路径
 sjtu-agent setup-config   # 从浏览器读取 Cookie 并生成 config.json
+sjtu-agent ykst-login     # 配置原生 YKST/树洞登录
 sjtu-agent login --aihaoke
 sjtu-agent ddl --canvas-only
 sjtu-agent daily-report --test
@@ -304,6 +305,10 @@ Bot 支持以下斜杠命令，在对话中直接输入即可：
 - `agent_config.json`：大模型提供方、Base URL 和模型名（若已在 `.env` 填写 `ZHIYUAN_API_KEY` 则无需此文件）
 
 对于 Canvas，如果 Playwright 和 jAccount 凭据已经就绪，`sjtu-agent setup` 会优先尝试自动创建并保存 Token；如果自动流程失败，再回退到打开 `https://oc.sjtu.edu.cn/profile/settings` 并让你手动确认一次。
+
+## YKST / 树洞原生支持
+
+SJTU Agent 内置 YKST/TreeHole gRPC-Web 客户端，支持自动 OAuth 登录、浏览主题回帖、搜索、点赞、收藏等操作。详见 [docs/ykst-treehole.md](docs/ykst-treehole.md)。
 
 ## 运行时数据
 

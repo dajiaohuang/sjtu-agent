@@ -26,5 +26,9 @@
 
   "_shuiyuan_comment": "水源社区 Discourse User API Key，通过授权流程获取，不会过期",
   "shuiyuan_user_api_key": "YOUR_USER_API_KEY",
-  "shuiyuan_user_api_client_id": "YOUR_CLIENT_ID"
+  "shuiyuan_user_api_client_id": "YOUR_CLIENT_ID",
+
+  "_ykst_comment": "YKST/TreeHole native support. Prefer saying '配置树洞' to start OAuth login; the token is saved locally only.",
+  "ykst_treehole_host": "https://proxy.treehole.qaq.ac.cn",
+  "ykst_treehole_token": "YOUR_TREEHOLE_SESSION_TOKEN"
 }

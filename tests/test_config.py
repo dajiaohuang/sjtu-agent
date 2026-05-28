@@ -54,6 +54,37 @@ def test_read_canvas_token(tmp_config):
     assert store.canvas_base_url == "https://oc.sjtu.edu.cn"
 
 
+def test_read_ykst_config(tmp_config, monkeypatch):
+    _, _, write = tmp_config
+    write({
+        "ykst_treehole_token": "tok_ykst",
+        "ykst_treehole_host": "https://proxy.example.test",
+    })
+    monkeypatch.delenv("TREEHOLE_SESSION", raising=False)
+    monkeypatch.delenv("TREEHOLE_TOKEN", raising=False)
+    monkeypatch.delenv("TREEHOLE_RPC_HOST", raising=False)
+
+    from sjtu_agent.config import ConfigStore
+    store = ConfigStore()
+    assert store.ykst_treehole_token == "tok_ykst"
+    assert store.ykst_treehole_host == "https://proxy.example.test"
+
+
+def test_ykst_env_overrides_config(tmp_config, monkeypatch):
+    _, _, write = tmp_config
+    write({
+        "ykst_treehole_token": "tok_config",
+        "ykst_treehole_host": "https://proxy.config.test",
+    })
+    monkeypatch.setenv("TREEHOLE_SESSION", "tok_env")
+    monkeypatch.setenv("TREEHOLE_RPC_HOST", "https://proxy.env.test")
+
+    from sjtu_agent.config import ConfigStore
+    store = ConfigStore()
+    assert store.ykst_treehole_token == "tok_env"
+    assert store.ykst_treehole_host == "https://proxy.env.test"
+
+
 def test_missing_key_returns_default(tmp_config):
     _, _, write = tmp_config
     write({})  # 空配置
