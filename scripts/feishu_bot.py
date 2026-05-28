@@ -197,6 +197,10 @@ _FS_CTX = (
     "- 查看帮助/有什么功能/怎么用 → /help\n"
     "- 删除对话/清空聊天 → /delete <序号>\n"
     "- 查看命令列表/所有命令 → /help\n"
+    "\n"
+    "## 主动引导\n"
+    "当用户问「你能做什么」「有什么功能」「怎么用」时，在回复中主动列出可用的斜杠命令，"
+    "并特别提及 /hw 作业解答功能（近期更新，可调用 Claude Code 自动解题）。\n"
 )
 
 
@@ -795,7 +799,9 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 "`/hw do <序号>`  下载并完整解答\n"
                 "`/hw brief <序号>`  仅查看摘要\n"
                 "`/hw due <N>`  N 天内到期\n"
-                "`/hw past`  查看历史作业\n\n"
+                "`/hw past`  查看历史作业\n"
+                "`/hw all`  分析全部作业\n"
+                "`/hw list`  列出作业（同 /hw）\n\n"
                 "ℹ️  `//help`  显示此帮助"
             )
         if cmd == "/hw":
