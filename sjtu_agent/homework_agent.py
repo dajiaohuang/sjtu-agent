@@ -157,18 +157,45 @@ def _generate_pdf_latex(title: str, md_text: str, output_path: Path, _latex_bin:
 __BODY__
 \end{document}"""
     # 安全转义：保护 $$...$$ 公式块不转义，其他文本转义特殊字符
+    def _process_non_math(text: str) -> str:
+        """处理非数学文本：标题转换 + 段落 + 转义"""
+        lines = text.split("\n")
+        result = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                result.append("")
+                continue
+            # Markdown 标题 → LaTeX section（在其他转义之前处理）
+            h = re.match(r"^(#{1,3})\s+(.+)$", stripped)
+            if h:
+                level = len(h.group(1))
+                cmd = {1: "section", 2: "subsection", 3: "subsubsection"}[level]
+                # 先转义标题文本内的特殊字符
+                title_text = h.group(2)
+                for ch in ["_", "&", "%", "{", "}"]:
+                    title_text = title_text.replace(ch, "\\" + ch)
+                result.append(f"\\{cmd}{{{title_text}}}")
+                continue
+            result.append(stripped)
+        # 用空行分隔段落
+        text = "\n\n".join(line for line in result if line is not None or line == "")
+        # 转义特殊字符（但跳过已有 LaTeX 命令）
+        for ch in ["_", "#", "&", "%", "{", "}"]:
+            # 只在非 LaTeX 命令区域替换
+            text = re.sub(rf"(?<!\\)[{ch}]", f"\\\\{ch}", text)
+        # 加粗/斜体
+        text = re.sub(r"\*\*(.+?)\*\*", r"\\textbf{\1}", text)
+        text = re.sub(r"\*(.+?)\*", r"\\textit{\1}", text)
+        return text
+
     parts = re.split(r"(\$\$.*?\$\$|\$[^$]+\$)", md_text, flags=re.DOTALL)
     escaped_parts = []
     for part in parts:
-        if part.startswith("$"):  # 公式块，保留原样
+        if part.startswith("$"):
             escaped_parts.append(part)
-        else:  # 普通文本，转义 LaTeX 特殊字符
-            part = part.replace("\\", "\\textbackslash{}")
-            for ch in ["_", "#", "&", "%", "{", "}"]:
-                part = part.replace(ch, "\\" + ch)
-            part = re.sub(r"\*\*(.+?)\*\*", r"\\textbf{\1}", part)
-            part = re.sub(r"\*(.+?)\*", r"\\textit{\1}", part)
-            escaped_parts.append(part)
+        else:
+            escaped_parts.append(_process_non_math(part))
     body = "".join(escaped_parts)
     tex = tex.replace("__TITLE__", title).replace("__BODY__", body)
 
