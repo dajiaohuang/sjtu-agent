@@ -794,7 +794,8 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 "`/hw`  列出 Canvas 作业\n"
                 "`/hw do <序号>`  下载并完整解答\n"
                 "`/hw brief <序号>`  仅查看摘要\n"
-                "`/hw due <N>`  N 天内到期\n\n"
+                "`/hw due <N>`  N 天内到期\n"
+                "`/hw past`  查看历史作业\n\n"
                 "ℹ️  `//help`  显示此帮助"
             )
         if cmd == "/hw":
@@ -816,6 +817,17 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 except ValueError:
                     return f"无效序号：{parts[2]}"
                 return "[homework] 正在获取摘要…\n\n" + run_homework_check(specific_idx=idx, brief=True)
+            elif sub == "past":
+                # /hw past [do <idx>]
+                rest = parts[2] if len(parts) > 2 else ""
+                rest_parts = rest.split(maxsplit=1)
+                if rest_parts and rest_parts[0] == "do":
+                    try:
+                        idx = int(rest_parts[1])
+                    except (ValueError, IndexError):
+                        return "用法：/hw past do <序号>"
+                    return "[homework] 正在分析历史作业…\n\n" + run_homework_check(specific_idx=idx, include_past=True)
+                return run_homework_check(list_only=True, include_past=True)
             elif sub == "list":
                 return run_homework_check(list_only=True)
             elif sub == "due":
@@ -830,9 +842,17 @@ def _handle_commands(open_id: str, text: str) -> str | None:
 
 def _process_hw_command(sender_open_id: str, message_id: str, text: str) -> None:
     """后台执行 /hw 命令（网络 I/O + LLM，避免阻塞 event loop）。"""
-    result = _handle_commands(sender_open_id, text)
-    if result:
-        _reply_text(message_id, result)
+    try:
+        result = _handle_commands(sender_open_id, text)
+        if result:
+            _reply_text(message_id, result)
+        else:
+            _reply_text(message_id, "[homework] 命令执行完毕但无结果")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[feishu] /hw 命令异常: {e}")
+        _reply_text(message_id, f"[homework] 出错：{e}")
 
 
 def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:

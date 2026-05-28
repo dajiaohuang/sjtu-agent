@@ -114,8 +114,8 @@ def make_session(cookies: dict, referer: str = "") -> requests.Session:
 
 # ── Platform 1: Canvas LMS ────────────────────────────────────────────────────
 
-def fetch_canvas(cfg: dict) -> list[dict]:
-    """通过 Canvas REST API 获取近期必做作业。"""
+def fetch_canvas(cfg: dict, include_past: bool = False) -> list[dict]:
+    """通过 Canvas REST API 获取作业。include_past=True 时包含已过期的历史作业。"""
     token = cfg.get("canvas_token", "").strip()
     base = cfg.get("canvas_base_url", "https://oc.sjtu.edu.cn").rstrip("/")
     if not token or token.startswith("YOUR_"):
@@ -163,7 +163,7 @@ def fetch_canvas(cfg: dict) -> list[dict]:
                 if a.get("workflow_state") == "deleted":
                     continue
                 due = parse_dt(a.get("due_at", ""))
-                if not due or due < datetime.now(CST):
+                if not include_past and (not due or due < datetime.now(CST)):
                     continue
                 pending.append({"id": a["id"], "name": a.get("name", "未知作业"), "due": due})
             asgn_url = r.links.get("next", {}).get("url")
@@ -1368,6 +1368,7 @@ def download_canvas_assignments(
     course_filter: str = "",
     assignment_filter: str = "",
     due_within_days: int | None = 7,
+    include_past: bool = False,
 ) -> list[dict]:
     """下载符合过滤条件的 Canvas 作业题目说明和附件，返回下载结果列表。"""
     token = cfg.get("canvas_token", "").strip()
@@ -1408,7 +1409,7 @@ def download_canvas_assignments(
                 if a.get("workflow_state") == "deleted":
                     continue
                 due = parse_dt(a.get("due_at", ""))
-                if not due or due < datetime.now(CST):
+                if not include_past and (not due or due < datetime.now(CST)):
                     continue
                 assignment_name = a.get("name", "未知作业")
                 if not _matches_assignment_download_filters(
@@ -1631,6 +1632,7 @@ def download_assignments(
     course_filter: str = "",
     assignment_filter: str = "",
     due_within_days: int | None = 7,
+    include_past: bool = False,
 ) -> list[dict]:
     """下载所有平台内符合过滤条件的近期作业材料。"""
     results: list[dict] = []
@@ -1643,6 +1645,7 @@ def download_assignments(
                 course_filter,
                 assignment_filter,
                 due_within_days,
+                include_past=include_past,
             )
         )
     if not skip_aihaoke:

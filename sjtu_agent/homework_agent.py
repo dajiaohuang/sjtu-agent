@@ -103,55 +103,16 @@ def _extract_code_blocks(md_text: str) -> list[tuple[str, str]]:
     return blocks
 
 
-def _generate_pdf(title: str, md_text: str, output_path: Path) -> None:
-    """从 Markdown 文本生成 PDF（中文支持）。"""
-    try:
-        from fpdf import FPDF
-        pdf = FPDF()
-        pdf.add_page()
-        font_path = "C:/Windows/Fonts/msyh.ttc"
-        try:
-            pdf.add_font("CJK", "", font_path, uni=True)
-            pdf.add_font("CJK", "B", font_path, uni=True)
-        except Exception:
-            pass
-        pdf.set_font("CJK", "", 11)
-        pdf.set_font_size(14)
-        pdf.multi_cell(0, 10, title)
-        pdf.ln(5)
-        pdf.set_font_size(10)
-        clean = re.sub(r"\*\*([^*]+)\*\*", r"\1", md_text)
-        clean = re.sub(r"\*([^*]+)\*", r"\1", clean)
-        clean = re.sub(r"`([^`]+)`", r"\1", clean)
-        clean = re.sub(r"```.*?```", "[代码块]", clean, flags=re.DOTALL)
-        for line in clean.split("\n"):
-            if pdf.get_y() > 270:
-                pdf.add_page()
-            pdf.multi_cell(0, 5, line or " ")
-        pdf.output(str(output_path))
-        print(f"[homework] PDF 已保存: {output_path}")
-    except Exception as e:
-        print(f"[homework] PDF 生成失败: {e}")
-
-
 def generate_solution_files(title: str, solution: str, output_dir: Path) -> list[str]:
-    """生成所有格式文件（.md / .py / .pdf / .docx）。"""
+    """生成 .md + 提取代码文件。PDF/HTML 由 Claude Code 自行生成。"""
     output_dir.mkdir(parents=True, exist_ok=True)
-    saved = []
-    # MD
+    saved = [str(output_dir / "_解答.md")]
     (output_dir / "_解答.md").write_text(solution, encoding="utf-8")
-    saved.append(str(output_dir / "_解答.md"))
-    # Code files
     for i, (lang, code) in enumerate(_extract_code_blocks(solution)):
         ext = lang if lang in ("py", "java", "cpp", "c", "js", "ts", "go") else "txt"
         p = output_dir / f"_code_{i+1}.{ext}"
         p.write_text(code, encoding="utf-8")
         saved.append(str(p))
-    # PDF
-    pdf_path = output_dir / "_解答.pdf"
-    _generate_pdf(title, solution, pdf_path)
-    if pdf_path.exists():
-        saved.append(str(pdf_path))
     return saved
 
 
@@ -218,6 +179,7 @@ def solve_homework(course: str, assignment_name: str, content: str,
 - 逐题解答，标清题号
 - 编程题给出完整可运行代码（含必要的 import 和注释）
 - 数学题给出分步推导和最终答案
+- **所有数学公式必须用 $$...$$ 包裹**（包括行内公式如 $$\alpha=1$$）
 - 论述题给出结构化论点
 - 如题目信息不完整请标注推断依据
 - 用中文回答"""
@@ -228,11 +190,19 @@ def solve_homework(course: str, assignment_name: str, content: str,
 analyze_homework = solve_homework
 
 
-def _fetch_pending() -> list[dict]:
-    """获取所有未提交的 Canvas 作业。"""
+def _fetch_pending(include_past: bool = False) -> list[dict]:
+    """获取 Canvas 作业。include_past=True 时包含已过期的历史作业。"""
     import ddl_checker as dc
     cfg = dc.load_config()
-    ddls = dc.fetch_canvas(cfg)
+    ddls = dc.fetch_canvas(cfg, include_past=include_past)
+    if include_past:
+        # 只返回已过期但已提交的作业（历史作业）
+        from datetime import datetime, timezone, timedelta
+        CST = timezone(timedelta(hours=8))
+        now = datetime.now(CST)
+        past = [d for d in ddls if d.get("due") and hasattr(d["due"], "timestamp") and d["due"] < now]
+        print(f"[homework] Canvas 共 {len(ddls)} 个作业，{len(past)} 个历史")
+        return past
     pending = [d for d in ddls if not d.get("submitted")]
     print(f"[homework] Canvas 共 {len(ddls)} 个作业，{len(pending)} 个未提交")
     return pending
@@ -290,35 +260,31 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
     except Exception:
         pass
 
-    prompt = f"""你是上海交通大学的学霸。在当前工作目录中完成作业并生成文件。
+    prompt = f"""在当前目录完成{aname}（{course}）。{user_ctx}
 
-课程：{course}
-作业名称：{aname}{user_ctx}
-
-**必须遵守的规则**：
-- 禁止提出任何问题！禁止要求确认！禁止等待回复！
-- 所有文件操作直接执行（--dangerously-skip-permissions 已开启）
-- 个人信息缺失时用 [待填写] 占位，不要停下来问
-- 无论是否完美，都要完成并输出结果
-- 最后输出 200 字摘要，以 "SUMMARY:" 开头
-
-工作流程：
-1. 读取目录中的 description.html 和所有附件
-2. 逐题解答（编程题给代码，数学题分步推导）
-3. 将解答写入 _解答.md，代码文件单独保存
-4. 输出 SUMMARY
-- 将解答保存为 _解答.md
-- 代码单独保存为 .py 等文件
-- 如果是 LaTeX 公式，在解答中正确排版"""
+铁律（违反即失败）：
+1. 禁止任何形式的提问/确认/等待——必须直接完成
+2. 先读完 description.html 和所有附件，再动笔
+3. 按以下规则选择输出格式（照做，不推断）：
+   - 含"代码/Python/C/Java/编程" → 必须生成 .py/.c/.java 文件 + README.md
+   - 含"PPT/展示/汇报" → _解答.md 内输出每页标题+要点大纲
+   - 物理/数学/信号/电路 → **所有公式必须用 $$...$$ 包裹**（行内公式也 $$）
+   - 含"论文/报告" → 结构：摘要/引言/方法/结果/结论
+   - 其他 → _解答.md + _解答.html
+4. 逐题解答写入 _解答.md
+5. 编写 _解答.tex 并运行 xelatex 编译成 _解答.pdf
+6. 输出 "SUMMARY:" 开头的 200 字摘要"""
 
     if brief:
         prompt += "\n注意：只要摘要，不要完整解答。"
 
     try:
+        # Windows subprocess 会截断多行参数，改用 stdin 传 prompt
         result = subprocess.run(
-            [_CLAUDE_BIN, "-p", prompt, "--add-dir", str(hw_dir),
-             "--dangerously-skip-permissions"],
-            cwd=str(hw_dir), capture_output=True, text=True, timeout=300,
+            [_CLAUDE_BIN, "-p", "--add-dir", str(hw_dir)],
+            cwd=str(hw_dir), input=prompt,
+            capture_output=True, text=True, timeout=300,
+            encoding="utf-8", errors="replace",
         )
         output = result.stdout.strip()
         if result.returncode != 0 and not output:
@@ -326,13 +292,12 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
             print(f"  stderr: {result.stderr[:200]}")
             return solve_homework(course, aname, content, brief=brief)
 
-        # 提取 SUMMARY 部分作为飞书回复
+        # 提取 SUMMARY 作为飞书回复
         summary_marker = "SUMMARY:"
         if summary_marker in output:
             idx = output.index(summary_marker)
             summary = output[idx + len(summary_marker):].strip()[:500]
             return summary + f"\n\n完整解答已保存到 {hw_dir}"
-        # 没有 SUMMARY 标记，返回最后 500 字
         return output[-500:] + f"\n\n完整解答已保存到 {hw_dir}"
     except subprocess.TimeoutExpired:
         print("[homework] Claude Code 超时，回退 API")
@@ -344,12 +309,13 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
 
 def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
     """下载并解答单个作业。brief=True 仅返回摘要。"""
-    course = d["course"]
-    aname = d["name"]
-    due_str = d["due"].strftime("%m月%d日 %H:%M") if hasattr(d["due"], 'strftime') else str(d["due"])
+    course = d.get("course", "未知课程")
+    aname = d.get("name", "未知作业")
+    due = d.get("due")
+    due_str = due.strftime("%m月%d日 %H:%M") if due and hasattr(due, 'strftime') else str(due or "?")
     from datetime import datetime, timezone, timedelta
     CST = timezone(timedelta(hours=8))
-    days_left = (d["due"] - datetime.now(CST)).days if d.get("due") else "?"
+    days_left = (due - datetime.now(CST)).days if due else "?"
     remaining = f"{days_left} 天" if isinstance(days_left, int) else "?"
 
     safe_course = re.sub(r'[\\/*?:"<>|]', '_', course)
@@ -363,7 +329,8 @@ def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
         dc.download_assignments(
             cfg,  # 必需的第一个参数
             course_filter=course, assignment_filter=aname,
-            output_dir=str(ASSIGNMENTS_DIR), due_within_days=3650,  # 不限天数
+            output_dir=str(ASSIGNMENTS_DIR), due_within_days=3650,
+            include_past=True,  # 允许下载历史作业
         )
     except Exception as e:
         print(f"[homework] 下载失败 {course}/{aname}: {e}")
@@ -376,56 +343,58 @@ def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
             f"{content}"
         )
 
-    print(f"[homework] 解题: {course} - {aname}")
-    solution = _claude_code_solve(hw_dir, course, aname, content, brief=brief)
+    # 清理前次运行产生的旧输出文件，防止 Claude Code 误读
+    for old in hw_dir.glob("_解答.*"):
+        try: old.unlink()
+        except Exception: pass
+    for old in hw_dir.glob("_code_*"):
+        try: old.unlink()
+        except Exception: pass
 
-    # 生成解答文件
+    print(f"[homework] 解题: {course} - {aname}")
+    feishu_reply = _claude_code_solve(hw_dir, course, aname, content, brief=brief)
+
+    # 生成解答文件（从 Claude Code 写入的 _解答.md 读取完整内容）
+    solution_path = hw_dir / "_解答.md"
+    full_solution = solution_path.read_text(encoding="utf-8") if solution_path.exists() else feishu_reply
     title = f"{course} — {aname}"
     try:
-        files = generate_solution_files(title, solution, hw_dir)
+        files = generate_solution_files(title, full_solution, hw_dir)
         print(f"[homework] 已生成 {len(files)} 个文件: {files}")
     except Exception as e:
         print(f"[homework] 文件生成失败: {e}")
 
-    # 飞书回复：显示前 600 字，提示完整文件路径
-    preview = solution[:600]
-    if len(solution) > 600:
-        preview += f"\n\n…（完整解答共 {len(solution)} 字，已保存到电脑）\n{safe_course}/{safe_name}/"
-
+    # 飞书回复
     return (
         f"[{idx}] {course} — {aname}\n"
         f"截止：{due_str}（{remaining}）\n\n"
-        f"{preview}"
+        f"{feishu_reply}"
     )
 
 
 def _format_list(pending: list[dict]) -> str:
     """格式化作业列表。"""
     if not pending:
-        return "[homework] 暂无未提交的 Canvas 作业"
-    lines = [f"共 {len(pending)} 个未提交 Canvas 作业："]
+        return "[homework] 暂无 Canvas 作业"
+    lines = [f"共 {len(pending)} 个作业："]
     from datetime import datetime, timezone, timedelta
     CST = timezone(timedelta(hours=8))
     for i, d in enumerate(pending):
-        course = d["course"]
-        aname = d["name"]
-        due_str = d["due"].strftime("%m/%d") if hasattr(d["due"], 'strftime') else str(d["due"])
-        days = (d["due"] - datetime.now(CST)).days if d.get("due") else "?"
+        course = d.get("course", "未知课程")
+        aname = d.get("name", "未知作业")
+        due = d.get("due")
+        due_str = due.strftime("%m/%d") if due and hasattr(due, 'strftime') else str(due or "?")
+        days = (due - datetime.now(CST)).days if due else "?"
         lines.append(f"  [{i}] {course} — {aname}（{due_str}，{days} 天）")
     lines.append("\n/hw do <序号> 下载分析")
     return "\n".join(lines)
 
 
 def run_homework_check(due_within_days: int = 0, specific_idx: int | None = None,
-                       list_only: bool = False, brief: bool = False) -> str:
-    """主入口：列出或分析 Canvas 作业。
-
-    Args:
-        due_within_days: 过滤 N 天内到期（0=不限）
-        specific_idx: 分析指定序号（0-based）
-        list_only: 仅列出，不下载分析
-    """
-    pending = _fetch_pending()
+                       list_only: bool = False, brief: bool = False,
+                       include_past: bool = False) -> str:
+    """主入口：列出或分析 Canvas 作业。include_past=True 时包含历史作业。"""
+    pending = _fetch_pending(include_past=include_past)
     if due_within_days > 0:
         pending = _filter_by_due(pending, due_within_days)
         print(f"[homework] 过滤后 {len(pending)} 个 {due_within_days} 天内到期")
