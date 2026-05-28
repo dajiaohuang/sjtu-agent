@@ -16,14 +16,8 @@ sjtu-agent = "sjtu_agent.cli:main"
 [tool.setuptools]
 py-modules = [
   "agent",
-  "daily_report",
   "ddl_checker",
   "login",
-  "mcp_server",
-  "remind_check",
-  "setup_config",
-  "telegram_bot",
-  "wechat_bot",
 ]
 
 [tool.setuptools.packages.find]

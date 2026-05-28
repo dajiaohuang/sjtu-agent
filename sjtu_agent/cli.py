@@ -26,6 +26,21 @@ def _run_module(module_name: str, script_args: list[str] | None = None) -> int:
         sys.argv = old_argv
 
 
+def _run_script(script_name: str, script_args: list[str] | None = None) -> int:
+    root = Path(__file__).resolve().parent.parent
+    script = root / "scripts" / f"{script_name}.py"
+    old_argv = sys.argv[:]
+    sys.argv = [str(script), *(script_args or [])]
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+        return 0
+    except SystemExit as exc:
+        code = exc.code
+        return code if isinstance(code, int) else 0
+    finally:
+        sys.argv = old_argv
+
+
 def _cmd_doctor(_: argparse.Namespace) -> int:
     import agent
 
@@ -204,7 +219,7 @@ def _cmd_chat(args: argparse.Namespace) -> int:
 
 
 def _cmd_setup_config(args: argparse.Namespace) -> int:
-    return _run_module("setup_config", args.script_args)
+    return _run_script("setup_config", args.script_args)
 
 
 def _cmd_login(args: argparse.Namespace) -> int:
@@ -221,48 +236,27 @@ def _cmd_daily_report(args: argparse.Namespace) -> int:
         passthru = ["--type", args.type] + passthru
     if getattr(args, "test", False):
         passthru = ["--test"] + passthru
-    return _run_module("daily_report", passthru)
+    return _run_script("daily_report", passthru)
 
 
 def _cmd_telegram_bot(args: argparse.Namespace) -> int:
-    return _run_module("telegram_bot", args.script_args)
+    return _run_script("telegram_bot", args.script_args)
 
 
 def _cmd_feishu_bot(args: argparse.Namespace) -> int:
-    root = Path(__file__).resolve().parent.parent
-    script = root / "feishu_bot.py"
-    old_argv = sys.argv[:]
-    sys.argv = [str(script), *(args.script_args or [])]
-    try:
-        runpy.run_path(str(script), run_name="__main__")
-        return 0
-    except SystemExit as exc:
-        code = exc.code
-        return code if isinstance(code, int) else 0
-    finally:
-        sys.argv = old_argv
+    return _run_script("feishu_bot", args.script_args)
 
 
 def _cmd_remind_check(args: argparse.Namespace) -> int:
-    return _run_module("remind_check", args.script_args)
+    return _run_script("remind_check", args.script_args)
 
 
 def _cmd_news_digest(args: argparse.Namespace) -> int:
-    """运行智能新闻日报（采集 + 排序 + 推送）。"""
-    root = Path(__file__).resolve().parent.parent
-    script = root / "news_digest.py"
-    old_argv = sys.argv[:]
-    sys.argv = [str(script), *(args.script_args or [])]
-    try:
-        import runpy
-        runpy.run_path(str(script), run_name="__main__")
-    finally:
-        sys.argv = old_argv
-    return 0
+    return _run_script("news_digest", args.script_args)
 
 
 def _cmd_mcp(args: argparse.Namespace) -> int:
-    return _run_module("mcp_server", args.script_args)
+    return _run_script("mcp_server", args.script_args)
 
 
 def _cmd_web(args: argparse.Namespace) -> int:
@@ -272,19 +266,7 @@ def _cmd_web(args: argparse.Namespace) -> int:
 
 
 def _cmd_wechat_bot(args: argparse.Namespace) -> int:
-    # wechat_bot.py 位于项目根目录，用 run_path 直接执行脚本文件
-    root = Path(__file__).resolve().parent.parent
-    script = root / "wechat_bot.py"
-    old_argv = sys.argv[:]
-    sys.argv = [str(script), *(args.script_args or [])]
-    try:
-        runpy.run_path(str(script), run_name="__main__")
-        return 0
-    except SystemExit as exc:
-        code = exc.code
-        return code if isinstance(code, int) else 0
-    finally:
-        sys.argv = old_argv
+    return _run_script("wechat_bot", args.script_args)
 
 
 def _parse_hhmm(value: str) -> tuple[int, int]:

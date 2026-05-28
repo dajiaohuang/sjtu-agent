@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 
 # 确保能 import 同目录下的 ddl_checker
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.fastmcp import FastMCP
 import ddl_checker as dc

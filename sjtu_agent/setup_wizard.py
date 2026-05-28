@@ -296,10 +296,16 @@ def _needs_cookie_import(status: dict) -> bool:
 
 
 def _import_browser_cookies() -> bool:
-    import setup_config
-
+    import importlib.util
+    _script = Path(__file__).resolve().parent.parent / "scripts" / "setup_config.py"
+    _spec = importlib.util.spec_from_file_location("setup_config", _script)
+    if _spec is None or _spec.loader is None:
+        raise RuntimeError("Cannot load setup_config.py from scripts/")
+    _mod = importlib.util.module_from_spec(_spec)
+    sys.modules["setup_config"] = _mod
+    _spec.loader.exec_module(_mod)
     try:
-        setup_config.main()
+        _mod.main()
         return True
     except SystemExit as exc:
         code = exc.code if isinstance(exc.code, int) else 1

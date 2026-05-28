@@ -24,7 +24,11 @@ import json
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from sjtu_agent.paths import CONFIG_PATH, REMINDERS_PATH, REMIND_CHECK_LOG_PATH, REMIND_STATE_PATH
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 import ddl_checker as dc
 

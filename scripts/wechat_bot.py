@@ -48,7 +48,7 @@ from pathlib import Path
 import httpx
 import qrcode  # pip install qrcode[pil]
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from sjtu_agent.paths import CONFIG_PATH
 
