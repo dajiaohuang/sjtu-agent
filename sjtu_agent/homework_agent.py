@@ -103,197 +103,6 @@ def _extract_code_blocks(md_text: str) -> list[tuple[str, str]]:
     return blocks
 
 
-def _generate_pdf(title: str, md_text: str, output_path: Path) -> None:
-    """从 Markdown 文本生成 PDF。优先用 pdflatex，fallback 到 fpdf2。"""
-    # 优先尝试 xelatex（原生 Unicode，公式完美渲染）
-    _XELATEX = "C:/Users/Lenovo/AppData/Local/Programs/MiKTeX/miktex/bin/x64/xelatex.exe"
-    if Path(_XELATEX).exists():
-        _generate_pdf_latex(title, md_text, output_path, _XELATEX)
-        if output_path.exists():
-            print(f"[homework] PDF (XeLaTeX) 已保存: {output_path}")
-            return
-        print("[homework] xelatex 失败，回退 fpdf2")
-
-    # Fallback: fpdf2
-    try:
-        from fpdf import FPDF
-        pdf = FPDF(orientation="P", unit="mm", format="A4")
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.add_page()
-        font_path = "C:/Windows/Fonts/msyh.ttc"
-        try:
-            pdf.add_font("CJK", "", font_path, uni=True)
-            pdf.add_font("CJK", "B", font_path, uni=True)
-            pdf.set_font("CJK", "", 11)
-        except Exception:
-            pdf.set_font("Courier", "", 10)
-        pdf.set_font_size(14)
-        pdf.multi_cell(0, 10, title)
-        pdf.ln(5)
-        pdf.set_font_size(10)
-        clean = re.sub(r"\*\*([^*]+)\*\*", r"\1", md_text)
-        clean = re.sub(r"\*([^*]+)\*", r"\1", clean)
-        clean = re.sub(r"`([^`]+)`", r"\1", clean)
-        clean = re.sub(r"```.*?```", "[代码块]", clean, flags=re.DOTALL)
-        clean = re.sub(r"\$\$.*?\$\$", "[公式]", clean, flags=re.DOTALL)
-        clean = re.sub(r"\$[^$]+\$", "[公式]", clean)
-        for line in clean.split("\n"):
-            pdf.multi_cell(0, 5, line or " ")
-        pdf.output(str(output_path))
-        print(f"[homework] PDF (fpdf2) 已保存: {output_path}")
-    except Exception as e:
-        print(f"[homework] PDF 生成失败: {e}")
-
-
-def _generate_pdf_latex(title: str, md_text: str, output_path: Path, _latex_bin: str = "") -> None:
-    """使用 XeLaTeX 生成 PDF（原生 CJK + LaTeX 公式完美渲染）。"""
-    import subprocess, tempfile
-    # 如果 _解答.md 实际上是 HTML 内容（Claude Code 误写的），提取纯文本
-    if md_text.strip().startswith("<!DOCTYPE") or "<html" in md_text[:500]:
-        from html.parser import HTMLParser
-        class _TextExtractor(HTMLParser):
-            def __init__(self):
-                super().__init__(); self.text = []
-            def handle_data(self, d): self.text.append(d)
-        ex = _TextExtractor(); ex.feed(md_text)
-        md_text = "\n".join(ex.text).strip()
-    tex = r"""\documentclass[12pt,a4paper]{ctexart}
-\usepackage{amsmath,amssymb}
-\usepackage{geometry}\geometry{margin=2.5cm}
-\title{__TITLE__}
-\begin{document}
-\maketitle
-__BODY__
-\end{document}"""
-    # 安全转义：保护 $$...$$ 公式块不转义，其他文本转义特殊字符
-    def _process_non_math(text: str) -> str:
-        """处理非数学文本：标题转换 + 段落 + 转义"""
-        lines = text.split("\n")
-        result = []
-        for line in lines:
-            stripped = line.strip()
-            if not stripped:
-                result.append("")
-                continue
-            # Markdown 标题 → LaTeX section（在其他转义之前处理）
-            h = re.match(r"^(#{1,3})\s+(.+)$", stripped)
-            if h:
-                level = len(h.group(1))
-                cmd = {1: "section", 2: "subsection", 3: "subsubsection"}[level]
-                # 先转义标题文本内的特殊字符
-                title_text = h.group(2)
-                for ch in ["_", "&", "%", "{", "}"]:
-                    title_text = title_text.replace(ch, "\\" + ch)
-                result.append(f"\\{cmd}{{{title_text}}}")
-                continue
-            result.append(stripped)
-        # 用空行分隔段落
-        text = "\n\n".join(line for line in result if line is not None or line == "")
-        # 转义特殊字符（但跳过已有 LaTeX 命令）
-        for ch in ["_", "#", "&", "%", "{", "}"]:
-            # 只在非 LaTeX 命令区域替换
-            text = re.sub(rf"(?<!\\)[{ch}]", f"\\\\{ch}", text)
-        # 加粗/斜体
-        text = re.sub(r"\*\*(.+?)\*\*", r"\\textbf{\1}", text)
-        text = re.sub(r"\*(.+?)\*", r"\\textit{\1}", text)
-        return text
-
-    parts = re.split(r"(\$\$.*?\$\$|\$[^$]+\$)", md_text, flags=re.DOTALL)
-    escaped_parts = []
-    for part in parts:
-        if part.startswith("$"):
-            escaped_parts.append(part)
-        else:
-            escaped_parts.append(_process_non_math(part))
-    body = "".join(escaped_parts)
-    tex = tex.replace("__TITLE__", title).replace("__BODY__", body)
-
-    tmpdir = tempfile.mkdtemp()
-    tex_path = Path(tmpdir) / "solution.tex"
-    tex_path.write_text(tex, encoding="utf-8")
-    for _ in range(2):
-        subprocess.run(
-            [_latex_bin, "-interaction=nonstopmode", "-output-directory", tmpdir,
-             str(tex_path)],
-            capture_output=True, timeout=30,
-        )
-    pdf_src = Path(tmpdir) / "solution.pdf"
-    if pdf_src.exists():
-        import shutil as _sh
-        _sh.copy(str(pdf_src), str(output_path))
-
-
-def _generate_html(title: str, md_text: str, output_path: Path) -> None:
-    """生成内嵌 MathJax 的 HTML，正确渲染 LaTeX 公式和 Markdown 基础格式。"""
-    import re as _re
-    lines = md_text.split(chr(10))
-    html_lines = []
-    in_code = False
-    in_table = False
-
-    for line in lines:
-        # Code blocks
-        if line.strip().startswith("```"):
-            in_code = not in_code
-            html_lines.append("</pre>" if not in_code else "<pre>")
-            continue
-        if in_code:
-            html_lines.append(line.replace("&", "&amp;").replace("<", "&lt;"))
-            continue
-
-        stripped = line.strip()
-        if not stripped:
-            html_lines.append("<br>")
-            continue
-
-        # Headers
-        h = _re.match(r"^(#{1,3})\s+(.+)$", stripped)
-        if h:
-            level = min(len(h.group(1)) + 1, 4)
-            html_lines.append(f"<h{level}>{h.group(2)}</h{level}>")
-            continue
-
-        # Unordered list
-        if _re.match(r"^[-*]\s+", stripped):
-            text = _re.sub(r"^[-*]\s+", "", stripped)
-            html_lines.append(f"<li>{text}</li>")
-            continue
-
-        # Ordered list
-        ol = _re.match(r"^\d+\.\s+(.+)$", stripped)
-        if ol:
-            html_lines.append(f"<li>{ol.group(1)}</li>")
-            continue
-
-        # Table separator
-        if _re.match(r"^\|?[\s\-:|]+$", stripped) and "|" in stripped:
-            continue  # skip separator rows
-
-        # Default paragraph with inline formatting
-        text = stripped.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        text = _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-        text = _re.sub(r"\*(.+?)\*", r"<i>\1</i>", text)
-        text = _re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
-        html_lines.append(f"<p>{text}</p>")
-
-    body = chr(10).join(html_lines)
-    html = f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head><meta charset="UTF-8"><title>{title}</title>
-<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-<script>window.MathJax={{tex:{{inlineMath:[['$','$'],['\\\\(','\\\\)']],displayMath:[['$$','$$'],['\\\\[','\\\\]']]}}}}</script>
-<style>body{{font-family:"Microsoft YaHei","SimHei",sans-serif;max-width:900px;margin:40px auto;line-height:1.8;font-size:15px;color:#222;padding:0 20px}}
-h2,h3,h4{{color:#1a1a2e;margin-top:24px}} b{{color:#1a1a2e}} code{{background:#f4f4f4;padding:1px 4px;border-radius:3px}}
-pre{{background:#f8f8f8;padding:12px;border-radius:6px;overflow-x:auto}} li{{margin:4px 0}}
-table{{border-collapse:collapse;margin:10px 0}} td,th{{border:1px solid #ccc;padding:4px 10px}}</style></head>
-<body><h2>{title}</h2>{body}</body></html>"""
-    try:
-        output_path.write_text(html, encoding="utf-8")
-        print(f"[homework] HTML 已保存: {output_path}")
-    except Exception as e:
-        print(f"[homework] HTML 生成失败: {e}")
-
-
 def generate_solution_files(title: str, solution: str, output_dir: Path) -> list[str]:
     """生成所有格式文件（.md / .py / .pdf / .docx）。"""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -307,9 +116,8 @@ def generate_solution_files(title: str, solution: str, output_dir: Path) -> list
         p = output_dir / f"_code_{i+1}.{ext}"
         p.write_text(code, encoding="utf-8")
         saved.append(str(p))
-    # PDF
+    # PDF 由 Claude Code 通过 xelatex 编译生成（_解答.pdf）
     pdf_path = output_dir / "_解答.pdf"
-    _generate_pdf(title, solution, pdf_path)
     if pdf_path.exists():
         saved.append(str(pdf_path))
     return saved
@@ -470,7 +278,9 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
    - 物理/数学/信号/电路 → **所有公式必须用 $$...$$ 包裹**（行内公式也 $$）
    - 含"论文/报告" → 结构：摘要/引言/方法/结果/结论
    - 其他 → _解答.md + _解答.html
-4. 逐题解答写入 _解答.md，最后输出 "SUMMARY:" 开头的 200 字摘要"""
+4. 逐题解答写入 _解答.md
+5. 生成 _解答.tex（ctexart 文档类）并运行 xelatex 编译为 _解答.pdf
+6. 输出 "SUMMARY:" 开头的 200 字摘要"""
 
     if brief:
         prompt += "\n注意：只要摘要，不要完整解答。"
