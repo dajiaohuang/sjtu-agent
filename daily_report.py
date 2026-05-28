@@ -166,6 +166,18 @@ def _send_feishu(text: str) -> None:
 
 # ── 数据收集 ──────────────────────────────────────────────────────────────────
 
+def _get_news() -> str:
+    """从 NewsAggregator 获取最近新闻摘要。失败时返回空字符串。"""
+    try:
+        from sjtu_agent.news_aggregator import NewsAggregator
+        agg = NewsAggregator()
+        md_digest, _ = agg.run(hours=24, top_k=4)
+        return md_digest or ""
+    except Exception as e:
+        print(f"[daily_report] 新闻获取失败: {e}")
+        return ""
+
+
 def _collect_data() -> dict:
     """并行收集各平台数据，任何单项失败不影响其他项。"""
     import concurrent.futures as cf
@@ -176,6 +188,7 @@ def _collect_data() -> dict:
         "schedule": lambda: agent.tool_get_schedule(query_type="day", date="今天"),
         "lab":      lambda: agent.tool_get_next_lab(),
         "jwc":      lambda: agent.tool_search_campus("通知 公告", sites=["jwc"], max_results=4),
+        "news":     lambda: _get_news(),
     }
 
     with cf.ThreadPoolExecutor(max_workers=4) as pool:
@@ -233,6 +246,7 @@ def build_report(report_type: str = "evening") -> str:
     schedule_raw = data.get("schedule")
     lab_raw      = data.get("lab")
     jwc_raw      = data.get("jwc")
+    news_raw     = data.get("news", "") or ""
 
     # 从 schedule 提取课程列表文字
     def _fmt_schedule(s):
@@ -292,7 +306,10 @@ def build_report(report_type: str = "evening") -> str:
 {_fmt_lab(lab_raw)}
 
 【教务处最新通知】
-{_fmt_jwc(jwc_raw)}"""
+{_fmt_jwc(jwc_raw)}
+
+【校园新闻/水源热帖（近24h）】
+{news_raw or "（暂无）"}"""
 
     _THINK_RE = __import__("re").compile(r"<think>.*?</think>", __import__("re").DOTALL)
 
@@ -318,6 +335,7 @@ def build_report(report_type: str = "evening") -> str:
 📅 <b>今日课程</b>：课程名+时间（如无课则写"今日无课"）
 🔬 <b>下次实验</b>：时间、地点（如无则写"暂无安排"）
 📢 <b>教务通知</b>：最多2条关键通知摘要（如无则写"暂无新通知"）
+📰 <b>校园动态</b>：从校园新闻中选取1-2条最相关或有趣的摘要（如无则写"暂无"）
 💡 <b>行动建议</b>：根据当前 DDL 紧急程度和时段，用1-2句话给出具体建议
 
 以下是收集到的数据：

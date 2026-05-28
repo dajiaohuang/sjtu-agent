@@ -260,6 +260,43 @@ def _send_notification(title: str, subtitle: str, body: str) -> None:
     except Exception as e:
         _log(f"Telegram 推送失败: {e}")
 
+    # ── 飞书推送 ──────────────────────────────────────────────────────────
+    try:
+        cfg = _load_cfg()
+        if not cfg.get("feishu_enabled", True):
+            return
+        app_id = cfg.get("feishu_app_id", "")
+        app_secret = cfg.get("feishu_app_secret", "")
+        open_id = cfg.get("feishu_open_id", "")
+        if not app_id or not app_secret or not open_id:
+            return
+        import requests
+        r = requests.post(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            json={"app_id": app_id, "app_secret": app_secret}, timeout=10,
+        )
+        if r.status_code != 200 or r.json().get("code") != 0:
+            _log(f"飞书推送 token 获取失败")
+            return
+        token = r.json()["tenant_access_token"]
+        text = f"🔔 {title}\n{subtitle}"
+        if body:
+            text += f"\n{body}"
+        resp = requests.post(
+            "https://open.feishu.cn/open-apis/im/v1/messages",
+            params={"receive_id_type": "open_id"},
+            headers={"Authorization": f"Bearer {token}"},
+            json={"receive_id": open_id, "msg_type": "text",
+                  "content": json.dumps({"text": text}, ensure_ascii=False)},
+            timeout=15,
+        )
+        if resp.status_code == 200 and resp.json().get("code") == 0:
+            _log("飞书推送完成")
+        else:
+            _log(f"飞书推送失败: {resp.text[:100]}")
+    except Exception as e:
+        _log(f"飞书推送异常: {e}")
+
 
 # ── 核心逻辑 ─────────────────────────────────────────────────────────────────
 
