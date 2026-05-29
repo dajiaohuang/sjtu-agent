@@ -295,6 +295,18 @@ Bot 支持以下斜杠命令，在对话中直接输入即可：
 
 > **前置条件**：本机需安装 Claude Code（`npm install -g @anthropic-ai/claude-code`）并配置 API Key。
 
+### MATLAB 图表生成（可选）
+
+若本机安装了 MATLAB（R2020a+），Claude Code 在做作业时可自动调用 MATLAB 生成高质量矢量图表并嵌入 PDF 解答：
+
+1. Claude Code 编写 `_figures.m` 脚本（`figure(); plot(...); exportgraphics(gcf,'fig1.pdf','ContentType','vector')`）
+2. 通过 `matlab -batch` 运行脚本，生成矢量 PDF 图片
+3. 在 `_解答.tex` 中用 `\includegraphics{fig1.pdf}` 嵌入，xelatex 编译后图表无损整合到 PDF 中
+
+MATLAB 路径可通过 `MATLAB_PATH` 环境变量自定义，未设置时自动搜索常见安装位置。若未安装 MATLAB，Claude Code 将回退到 Matplotlib。
+
+> MiKTeX（`winget install MiKTeX.MiKTeX`）用于 xelatex 编译 LaTeX 生成 PDF。需额外安装 ctex 中文宏包：`mpm --install ctex`。
+
 ## 配置说明
 
 最重要的运行时文件有三个：
