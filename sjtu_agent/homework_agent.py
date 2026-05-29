@@ -281,7 +281,7 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
     try:
         # Windows subprocess 会截断多行参数，改用 stdin 传 prompt
         result = subprocess.run(
-            [_CLAUDE_BIN, "-p", "--add-dir", str(hw_dir)],
+            [_CLAUDE_BIN, "-p", "--add-dir", str(hw_dir), "--permission-mode", "bypassPermissions"],
             cwd=str(hw_dir), input=prompt,
             capture_output=True, text=True, timeout=300,
             encoding="utf-8", errors="replace",
