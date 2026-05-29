@@ -276,6 +276,21 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
 6. **所有数学表达式（2^n、x_i、α+β、log n 等）必须用 $...$（行内）或 $$...$$（独立行）包裹，严禁在正文中裸写数学符号。**
 7. 输出 "SUMMARY:" 开头的 200 字摘要"""
 
+    # MATLAB 图表生成（若本机安装了 MATLAB）
+    try:
+        from sjtu_agent.matlab_util import matlab_available, MATLAB_BIN
+        if matlab_available():
+            prompt += f"""
+8. 如需图表/数据可视化，**优先用 MATLAB 而非 Matplotlib**：
+   a) 编写 _figures.m，每张图用 figure(); plot/fplot/surf(...);
+      exportgraphics(gcf,'figN.pdf','ContentType','vector'); 保存
+   b) 运行 `{MATLAB_BIN}` -batch "run('_figures.m'); exit"
+   c) 在 _解答.tex 中用 \\includegraphics{{figN.pdf}} 嵌入，
+      xelatex 编译后矢量图无损整合到 PDF 中
+   **MATLAB 矢量 PDF 可无损嵌入 LaTeX，远优于 PNG 截图**"""
+    except Exception:
+        pass
+
     if brief:
         prompt += "\n注意：只要摘要，不要完整解答。"
 
@@ -351,6 +366,12 @@ def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
     for old in hw_dir.glob("_code_*"):
         try: old.unlink()
         except Exception: pass
+    # 清理 MATLAB / LaTeX 前次运行残留
+    for pattern in ["fig*.pdf", "fig*.png", "fig*.eps", "_figures.m",
+                     "*.aux", "*.log", "*.out", "*.toc"]:
+        for old in hw_dir.glob(pattern):
+            try: old.unlink()
+            except Exception: pass
 
     print(f"[homework] 解题: {course} - {aname}")
     feishu_reply = _claude_code_solve(hw_dir, course, aname, content, brief=brief)
