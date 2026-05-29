@@ -372,11 +372,12 @@ def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
     )
 
 
-def _format_list(pending: list[dict]) -> str:
-    """格式化作业列表。"""
+def _format_list(pending: list[dict], past: bool = False) -> str:
+    """格式化作业列表。past=True 时提示用户使用 /hw past do 而非 /hw do。"""
     if not pending:
         return "[homework] 暂无 Canvas 作业"
-    lines = [f"共 {len(pending)} 个作业："]
+    past_label = "（已提交）" if past else ""
+    lines = [f"共 {len(pending)} 个作业{past_label}："]
     from datetime import datetime, timezone, timedelta
     CST = timezone(timedelta(hours=8))
     for i, d in enumerate(pending):
@@ -385,8 +386,11 @@ def _format_list(pending: list[dict]) -> str:
         due = d.get("due")
         due_str = due.strftime("%m/%d") if due and hasattr(due, 'strftime') else str(due or "?")
         days = (due - datetime.now(CST)).days if due else "?"
-        lines.append(f"  [{i}] {course} — {aname}（{due_str}，{days} 天）")
-    lines.append("\n/hw do <序号> 下载分析")
+        lines.append(f"  [{i+1}] {course} — {aname}（{due_str}，{days} 天）")
+    if past:
+        lines.append("\n/hw past do <序号> 下载分析")
+    else:
+        lines.append("\n/hw do <序号> 下载分析")
     return "\n".join(lines)
 
 
@@ -405,13 +409,14 @@ def run_homework_check(due_within_days: int = 0, specific_idx: int | None = None
 
     # 仅列出
     if list_only:
-        return _format_list(pending)
+        return _format_list(pending, past=include_past)
 
-    # 分析指定作业
+    # 分析指定作业（用户输入 1-based 序号，转为 0-based）
     if specific_idx is not None:
-        if 0 <= specific_idx < len(pending):
-            return _download_and_analyze_one(pending[specific_idx], specific_idx, brief=brief)
-        return f"[homework] 无效序号：{specific_idx}，共 {len(pending)} 个（0~{len(pending)-1}）"
+        idx = specific_idx - 1
+        if 0 <= idx < len(pending):
+            return _download_and_analyze_one(pending[idx], idx, brief=brief)
+        return f"[homework] 无效序号：{specific_idx}，共 {len(pending)} 个（1~{len(pending)}）"
 
     # 默认：列出
     return _format_list(pending)

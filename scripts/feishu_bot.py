@@ -726,46 +726,46 @@ def _handle_commands(open_id: str, text: str) -> str | None:
             for i, c in enumerate(convs):
                 marker = " ← 当前" if i == meta["current_idx"] else ""
                 msg_count = len([m for m in c["messages"] if m.get("role") == "user"])
-                lines.append(f"  [{i}] {c['name']}（{msg_count} 条消息, {c['created_at']}）{marker}")
+                lines.append(f"  [{i+1}] {c['name']}（{msg_count} 条消息, {c['created_at']}）{marker}")
             return "\n".join(lines)
         if cmd == "/new":
             name = parts[1].strip() if len(parts) > 1 else f"对话 {meta['next_name_id']}"
             meta["next_name_id"] += 1
             convs.append(_new_conv_dict(name))
             meta["current_idx"] = len(convs) - 1
-            return f"[OK] 已创建并切换到对话「{name}」（序号 {meta['current_idx']}）"
+            return f"[OK] 已创建并切换到对话「{name}」（序号 {len(convs)}）"
         if cmd == "/switch":
             if len(parts) < 2:
                 return "用法：/switch <序号>，用 /list 查看序号"
             try:
-                idx = int(parts[1])
+                idx = int(parts[1]) - 1
             except ValueError:
                 return f"无效序号：{parts[1]}"
             if idx < 0 or idx >= n:
-                return f"无效序号，共 {n} 个对话（0~{n-1}）"
+                return f"无效序号，共 {n} 个对话（1~{n}）"
             meta["current_idx"] = idx
-            return f"[OK] 已切换到对话「{convs[idx]['name']}」（序号 {idx}）"
+            return f"[OK] 已切换到对话「{convs[idx]['name']}」（序号 {idx + 1}）"
         if cmd == "/name":
             if len(parts) < 3:
                 return "用法：/name <序号> <新名称>"
             try:
-                idx = int(parts[1])
+                idx = int(parts[1]) - 1
             except ValueError:
                 return f"无效序号：{parts[1]}"
             if idx < 0 or idx >= n:
-                return f"无效序号，共 {n} 个对话（0~{n-1}）"
+                return f"无效序号，共 {n} 个对话（1~{n}）"
             old_name = convs[idx]["name"]
             convs[idx]["name"] = parts[2].strip()
-            return f"[OK] 已将对话 [{idx}]「{old_name}」重命名为「{convs[idx]['name']}」"
+            return f"[OK] 已将对话 [{idx + 1}]「{old_name}」重命名为「{convs[idx]['name']}」"
         if cmd == "/delete":
             if len(parts) < 2:
                 return "用法：/delete <序号>"
             try:
-                idx = int(parts[1])
+                idx = int(parts[1]) - 1
             except ValueError:
                 return f"无效序号：{parts[1]}"
             if idx < 0 or idx >= n:
-                return f"无效序号，共 {n} 个对话（0~{n-1}）"
+                return f"无效序号，共 {n} 个对话（1~{n}）"
             if n <= 1:
                 return "[X] 至少保留一个对话"
             name = convs[idx]["name"]
