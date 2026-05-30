@@ -970,6 +970,8 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
         if not text:
             return
 
+        print(f"[feishu] TEXT={text!r}")  # DEBUG: 查看实际收到的文本
+
         # ── 自然语言短语拦截 ────────────────────────────────────────
         _t = text.strip()
         if any(kw in _t for kw in ["最近更新", "新功能", "新版变化", "更新了什么"]):
