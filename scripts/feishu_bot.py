@@ -313,9 +313,27 @@ _SEEN_IDS: dict[str, float] = {}
 _SEEN_IDS_LOCK = threading.Lock()
 _SEEN_TTL = 300  # 5 分钟
 
+# 内容去重（防止飞书用不同 message_id 重发同一事件）
+_SEEN_CONTENT: dict[str, tuple[str, float]] = {}
+_SEEN_CONTENT_LOCK = threading.Lock()
+_CONTENT_DEDUP_SEC = 5
+
 
 def _is_duplicate(message_id: str) -> bool:
     """检查 message_id 是否已处理过，防止飞书重发导致重复回复。"""
+
+
+def _is_duplicate_content(sender_id: str, text: str) -> bool:
+    """检查同一发送者的相同内容是否在 5 秒内已处理过。"""
+    key = f"{sender_id}:{text}"
+    now = time.time()
+    with _SEEN_CONTENT_LOCK:
+        if key in _SEEN_CONTENT:
+            _, ts = _SEEN_CONTENT[key]
+            if now - ts < _CONTENT_DEDUP_SEC:
+                return True
+        _SEEN_CONTENT[key] = (text, now)
+    return False
     now = time.time()
     with _SEEN_IDS_LOCK:
         expired = [mid for mid, ts in _SEEN_IDS.items() if now - ts > _SEEN_TTL]
@@ -977,6 +995,11 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
 
         text = _extract_text(msg.content)
         if not text:
+            return
+
+        # 内容去重：防止飞书用不同 message_id 重发同一事件
+        if _is_duplicate_content(sender_open_id, text):
+            print(f"[feishu] 跳过重复内容: {text[:40]!r}")
             return
 
         # ── 自然语言短语拦截 ────────────────────────────────────────
