@@ -1040,13 +1040,21 @@ def main() -> None:
 
     if args.test:
         # 测 token 是否能换取，证明 app_id/secret 没填错
-        from lark_oapi.core.http.transport import Transport
         try:
-            tenant_token = _api_client._config.token_manager.get_tenant_access_token()  # type: ignore
-            if tenant_token:
-                print(f"[OK] 凭据 OK，tenant_access_token 已获取（前 8 位）：{tenant_token[:8]}…")
+            from lark_oapi.api.auth.v3 import (
+                InternalTenantAccessTokenRequest,
+                InternalTenantAccessTokenRequestBody,
+            )
+            req = InternalTenantAccessTokenRequest.builder() \
+                .request_body(InternalTenantAccessTokenRequestBody.builder()
+                              .app_id(APP_ID).app_secret(APP_SECRET).build()) \
+                .build()
+            resp = _api_client.auth.v3.tenant_access_token.internal(req)
+            if resp.success():
+                token = resp.data.tenant_access_token or ""
+                print(f"[OK] 凭据 OK，tenant_access_token 已获取（前 8 位）：{token[:8]}…")
                 sys.exit(0)
-            print("[X] 未能获取 tenant_access_token，请检查 App ID / App Secret")
+            print(f"[X] 未能获取 tenant_access_token: {resp.msg}")
             sys.exit(1)
         except Exception as e:
             print(f"[X] 凭据校验失败：{e}")
