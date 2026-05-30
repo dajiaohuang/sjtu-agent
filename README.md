@@ -1,5 +1,7 @@
 # SJTU Agent
 
+[![Test](https://github.com/kuan-er/sjtu-agent/actions/workflows/test.yml/badge.svg)](https://github.com/kuan-er/sjtu-agent/actions/workflows/test.yml)
+
 面向上海交通大学学生的校园助手，提供终端对话、Telegram / 飞书 / 微信 / QQ Bot、提醒守护进程和 MCP Server。
 
 English summary: A deployable Shanghai Jiao Tong University campus assistant with terminal chat, Telegram / Feishu (Lark) / WeChat / QQ bots, reminder daemon, and MCP server.
@@ -304,7 +306,18 @@ psmux -L sjtu-agent ls
    - `qq_remove_user`：删除白名单用户
 6. 白名单修改后，重启 `sjtu-agent qq-bot` 生效。需要后台常驻可运行 `sjtu-agent install-daemons --services qq-bot`。
 
->>>>>>> pr-39
+### MATLAB 图表生成（可选）
+
+若本机安装了 MATLAB（R2020a+），Claude Code 在做作业时可自动调用 MATLAB 生成高质量矢量图表并嵌入 PDF 解答：
+
+1. Claude Code 编写 `_figures.m` 脚本（`figure(); plot(...); exportgraphics(gcf,'fig1.pdf','ContentType','vector')`）
+2. 通过 `matlab -batch` 运行脚本，生成矢量 PDF 图片
+3. 在 `_解答.tex` 中用 `\includegraphics{fig1.pdf}` 嵌入，xelatex 编译后图表无损整合到 PDF 中
+
+MATLAB 路径可通过 `MATLAB_PATH` 环境变量自定义，未设置时自动搜索常见安装位置。若未安装 MATLAB，Claude Code 将回退到 Matplotlib。
+
+> MiKTeX（`winget install MiKTeX.MiKTeX`）用于 xelatex 编译 LaTeX 生成 PDF。需额外安装 ctex 中文宏包：`mpm --install ctex`。
+
 ## 配置说明
 
 最重要的运行时文件有三个：
