@@ -1025,6 +1025,7 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
             return
 
         cmd_result = _handle_commands(sender_open_id, text)
+        print(f"[feishu] _handle_commands({text[:40]!r}) → {cmd_result!r}")
         if cmd_result is not None:
             print(f"[feishu] 命令: {text[:40]!r}")
             _reply_text(message_id, cmd_result)
