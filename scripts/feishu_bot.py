@@ -970,16 +970,16 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
         if not text:
             return
 
+        # ── 自然语言短语拦截 ────────────────────────────────────────
+        _t = text.strip()
+        if any(kw in _t for kw in ["最近更新", "新功能", "新版变化", "更新了什么"]):
+            print(f"[feishu] 拦截近期更新: {text[:40]!r}")
+            _reply_text(message_id, _RECENT_UPDATES_TEXT)
+            return
+
         # 过滤"清空聊天记录"/撤回消息产生的系统通知
         if text in {"此消息已删除", "该消息已被撤回"}:
             print(f"[feishu] 跳过已删除/撤回的系统消息 message_id={message_id}")
-            return
-
-        # ── 自然语言短语拦截 ────────────────────────────────────────
-        t = text.strip()
-        if any(kw in t for kw in ["最近更新了什么", "最近更新", "有什么新功能",
-                                   "新版变化", "有什么更新", "新功能有哪些"]):
-            _reply_text(message_id, _RECENT_UPDATES_TEXT)
             return
 
         # ── 多对话命令拦截 ──────────────────────────────────────────
