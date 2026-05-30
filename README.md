@@ -118,22 +118,20 @@ sjtu-agent setup --yes --skip-cookie-import --skip-launchd
 sjtu-agent setup --yes --write-daemons-only --output-dir /tmp/sjtu-agent-launchd
 ```
 
-## MCP and Skills
+## MCP 与技能扩展
 
-Agent can expose its own tools as an MCP server, and it can also load external MCP servers as extra tools. External MCP server config lives in `config.json` under `mcp_servers`; enabled prompt-only skills live under `skills.enabled`.
+Agent 可将自身工具暴露为 MCP Server，也可加载外部 MCP Server 作为额外工具。外部 MCP Server 配置保存在 `config.json` 的 `mcp_servers` 字段中；已启用的 prompt-only 技能保存在 `skills.enabled` 字段中。
 
-Add any custom MCP server:
+添加自定义 MCP Server：
 
 ```bash
 sjtu-agent add-mcp-server my-tools --transport stdio --command python --arg D:/path/to/server.py
 sjtu-agent add-mcp-server remote-tools --transport sse --url http://127.0.0.1:8765/sse
 ```
 
-You can also ask the chat agent to "add a custom MCP server". The first
-chat-triggered call only warns that an external command or URL will be trusted;
-the agent should proceed only after explicit confirmation.
+也可在对话中让 Agent「添加自定义 MCP Server」。首次对话触发调用仅会提示将信任外部命令或 URL，需用户明确确认后才继续。
 
-Add a custom prompt-only skill:
+添加自定义 prompt-only 技能：
 
 ```bash
 sjtu-agent add-skill my-skill --content-file D:/path/to/SKILL.md
@@ -141,14 +139,9 @@ sjtu-agent list-skills
 sjtu-agent manage-skill disable my-skill
 ```
 
-You can also ask the chat agent to add a skill and provide either the full
-`SKILL.md` content or a local source file path.
+也可在对话中让 Agent 添加技能，并提供完整的 `SKILL.md` 内容或本地文件路径。
 
-For a more agent-native flow, ask the chat agent to "create a skill" and
-describe the behavior you want. If the requirement is not clear enough, the
-agent asks follow-up questions; once it has a name, trigger, and instructions it
-uses `create_skill`. You can also ask it to list, enable, disable, or delete
-skills through `list_skills` and `manage_skill`.
+如需更原生的 Agent 流程，可对 Agent 说「创建一个技能」并描述想要的行为。若需求不够明确，Agent 会追问补充信息；获得名称、触发条件和指令后，Agent 会通过 `create_skill` 创建技能。也可以通过 `list_skills` 和 `manage_skill` 列出、启用、禁用或删除技能。
 
 ## macOS 后台服务
 
