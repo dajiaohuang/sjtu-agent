@@ -980,8 +980,8 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
             return
 
         # ── 自然语言短语拦截 ────────────────────────────────────────
-        _t = text.strip()
-        if any(kw in _t for kw in ["最近更新", "新功能", "新版变化", "更新了什么"]):
+        t = text.strip()
+        if any(kw in t for kw in ["最近更新", "新功能", "新版变化", "更新了什么"]):
             now = time.time()
             with _cooldown_lock:
                 last = _recent_updates_cooldown.get(sender_open_id, 0)
