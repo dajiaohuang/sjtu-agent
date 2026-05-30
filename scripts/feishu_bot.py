@@ -916,6 +916,10 @@ def _process_hw_command(sender_open_id: str, message_id: str, text: str) -> None
 
 def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
     """Phase 2: 在后台线程中执行 LLM 推理 + 回复。"""
+    # 防御性检查：如果主循环已拦截并回复，不再走 LLM
+    t = text.strip()
+    if any(kw in t for kw in ["最近更新", "新功能", "新版变化", "更新了什么"]):
+        return
     conv, meta, lock = _get_active_conv(sender_open_id)
     if not lock.acquire(blocking=False):
         _reply_text(message_id, "上一条消息还在处理中，请稍候…")
@@ -969,10 +973,6 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
         text = _extract_text(msg.content)
         if not text:
             return
-
-        # DEBUG: 写日志确认文本内容
-        with open("C:/Users/Lenovo/feishu_debug.log", "a", encoding="utf-8") as _df:
-            _df.write(f"TEXT={text!r} MATCH={any(kw in text.strip() for kw in ['最近更新', '新功能', '更新了什么'])}\n")
 
         # ── 自然语言短语拦截 ────────────────────────────────────────
         _t = text.strip()
