@@ -1,8 +1,8 @@
 # SJTU Agent
 
-面向上海交通大学学生的校园助手，提供终端对话、Telegram / 飞书 / 微信 Bot、提醒守护进程和 MCP Server。
+面向上海交通大学学生的校园助手，提供终端对话、Telegram / 飞书 / 微信 / QQ Bot、提醒守护进程和 MCP Server。
 
-English summary: A deployable Shanghai Jiao Tong University campus assistant with terminal chat, Telegram / Feishu (Lark) / WeChat bots, reminder daemon, and MCP server.
+English summary: A deployable Shanghai Jiao Tong University campus assistant with terminal chat, Telegram / Feishu (Lark) / WeChat / QQ bots, reminder daemon, and MCP server.
 
 👉 **[项目展示页](https://kuan-er.github.io/sjtu-agent)**
 
@@ -96,6 +96,7 @@ sjtu-agent login --aihaoke
 sjtu-agent ddl --canvas-only
 sjtu-agent daily-report --test
 sjtu-agent telegram-bot --test
+sjtu-agent qq-bot --test
 sjtu-agent remind-check --list
 sjtu-agent mcp --http --port 8765
 sjtu-agent add-mcp-server my-tools --transport stdio --command python --arg D:/path/to/server.py
@@ -163,6 +164,7 @@ sjtu-agent install-daemons
 - `daily-report`：每天 `22:00` 运行一次
 - `remind-check`：每 `60` 秒运行一次
 - `telegram-bot`：登录后启动，并由 launchd 保活
+- `qq-bot`：登录后启动，并由 launchd 保活
 
 常见变体：
 
@@ -184,7 +186,7 @@ Windows 提供两种后端选择：**Task Scheduler**（默认，适合定时任
 sjtu-agent install-daemons
 ```
 
-每天 22:00 日报 + 每 60s 提醒检查 + 登录时启动 Telegram/飞书/微信 Bot + Web UI。
+每天 22:00 日报 + 每 60s 提醒检查 + 登录时启动 Telegram/飞书/微信/QQ Bot + Web UI。
 
 ### 用 psmux 管理常驻进程
 
@@ -215,7 +217,7 @@ psmux -L sjtu-agent ls
 | 查看状态 | `schtasks /Query` | `psmux -L sjtu-agent ls` |
 | 停止服务 | `schtasks /Delete` | `psmux kill-session -t <name>` |
 
-> **推荐组合**：`daily-report`、`remind-check` 用 taskschd（定时）；`feishu-bot`、`telegram-bot`、`wechat-bot`、`web` 用 psmux（常驻）。
+> **推荐组合**：`daily-report`、`remind-check` 用 taskschd（定时）；`feishu-bot`、`telegram-bot`、`wechat-bot`、`qq-bot`、`web` 用 psmux（常驻）。
 
 ## 在飞书中使用 Bot
 
@@ -290,6 +292,19 @@ psmux -L sjtu-agent ls
 | 想验证 App ID/Secret 对不对 | 终端跑 `sjtu-agent feishu-bot -- --test`（注意中间的 `--`） |
 | 想查自己的 open_id | 终端跑 `sjtu-agent feishu-bot -- --whoami`，然后随便发条消息 |
 
+## 在 QQ 中使用 Bot
+
+1. 登录 QQ 机器人平台（[q.qq.com/qqbot/openclaw](https://q.qq.com/qqbot/openclaw/)），创建机器人并获取 `AppID` / `AppSecret`。
+2. 在对话里让 Agent 调用 `setup_qq`（或手动写入 `config.json` 的 `qq_app_id` / `qq_app_secret`）。
+3. 启动 Bot：`sjtu-agent qq-bot`（可选先验证：`sjtu-agent qq-bot --test`）。
+4. 让要授权的 QQ 账号给 Bot 发一条消息，拿到「QQ 用户标识」（注意：不是 QQ 号）。
+5. 把该标识回填给 Agent，调用以下工具管理白名单：
+   - `qq_add_user`：添加白名单用户
+   - `qq_list_users`：查看白名单列表
+   - `qq_remove_user`：删除白名单用户
+6. 白名单修改后，重启 `sjtu-agent qq-bot` 生效。需要后台常驻可运行 `sjtu-agent install-daemons --services qq-bot`。
+
+>>>>>>> pr-39
 ## 配置说明
 
 最重要的运行时文件有三个：

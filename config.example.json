@@ -41,5 +41,11 @@
   "skills": {
     "enabled": [],
     "dirs": []
-  }
+  },
+
+  "_qq_comment": "QQ 官方机器人凭据（https://bot.q.qq.com）",
+  "qq_app_id": "",
+  "qq_app_secret": "",
+  "qq_allowed_user_ids": [],
+  "qq_enabled": true
 }

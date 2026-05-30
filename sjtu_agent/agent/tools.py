@@ -867,6 +867,97 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "setup_qq",
+            "description": (
+                "配置 QQ 官方机器人凭据（AppID + AppSecret）并保存到 config.json。"
+                "调用后会尝试请求 QQ OpenAPI 校验凭据可用性。"
+                "请先登录 https://q.qq.com/ ，进入机器人平台并创建机器人，再获取 AppID 与 AppSecret。"
+                "如果某些字段已配置，可只传需要修改的字段；未传字段会保留原值。"
+                "建议首次先不填 qq_allowed_user_ids，待目标用户给 Bot 发消息后再回填白名单。"
+                "注意 qq_allowed_user_ids 填的是 QQ 用户标识（openid/id），不是 QQ 号。"
+                "用户说“接入QQ”“配置QQ Bot”“QQ机器人”时调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "qq_app_id": {
+                        "type": "string",
+                        "description": "QQ 机器人 AppID（在 https://q.qq.com/qqbot/openclaw/ 获取）。不传则保留当前值。",
+                    },
+                    "qq_app_secret": {
+                        "type": "string",
+                        "description": "QQ 机器人 AppSecret（在 https://q.qq.com/qqbot/openclaw/ 获取）。不传则保留当前值。",
+                    },
+                    "qq_allowed_user_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "可选白名单用户标识（openid/id，不是 QQ 号）。不传则保留当前值；传空数组 [] 表示清空白名单（允许所有用户）。",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "qq_add_user",
+            "description": (
+                "将一个 QQ 用户标识加入 qq_allowed_user_ids 白名单。"
+                "如果没有 user_id，先提示用户：让待加入账号在 QQ 里给 Bot 发一条消息，"
+                "从机器人提示/日志中拿到「QQ 用户标识」后再回填。"
+                "注意这里填的是用户标识（openid/id），不是 QQ 号。"
+                "用户说『增加QQ用户』『添加QQ白名单用户』时调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "qq_user_id": {
+                        "type": "string",
+                        "description": "要加入白名单的 QQ 用户标识（openid/id，不是 QQ 号）。",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "qq_list_users",
+            "description": (
+                "列出当前 qq_allowed_user_ids 白名单。用户说『QQ用户列表』『查看QQ白名单』时调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "qq_remove_user",
+            "description": (
+                "从 qq_allowed_user_ids 删除一个用户标识。"
+                "用户说『删除QQ用户』『移除QQ白名单用户』时调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "qq_user_id": {
+                        "type": "string",
+                        "description": "要移除的 QQ 用户标识（openid/id，不是 QQ 号）。",
+                    },
+                },
+                "required": ["qq_user_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "fetch_url",
             "description": (
                 "抓取网页内容并提取纯文本。"
@@ -4099,6 +4190,216 @@ def tool_setup_feishu(feishu_app_id: str = "", feishu_app_secret: str = "", allo
     return result
 
 
+def tool_setup_qq(
+    qq_app_id: str = "",
+    qq_app_secret: str = "",
+    qq_allowed_user_ids: list | None = None,
+) -> dict:
+    """
+    保存 QQ 官方机器人凭据到 config.json，并尝试请求官方接口校验凭据。
+    """
+    cfg: dict = {}
+    if CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    if qq_app_id:
+        cfg["qq_app_id"] = str(qq_app_id).strip()
+    if qq_app_secret:
+        cfg["qq_app_secret"] = str(qq_app_secret).strip()
+    if qq_allowed_user_ids is not None:
+        cfg["qq_allowed_user_ids"] = [str(x).strip() for x in qq_allowed_user_ids if str(x).strip()]
+
+    effective_app_id = str(cfg.get("qq_app_id", "")).strip()
+    effective_app_secret = str(cfg.get("qq_app_secret", "")).strip()
+    if not effective_app_id or not effective_app_secret:
+        return {
+            "saved": False,
+            "error": "qq_app_id 和 qq_app_secret 仍不完整，请补全后重试。",
+            "current_state": {
+                "qq_app_id_set": bool(effective_app_id),
+                "qq_app_secret_set": bool(effective_app_secret),
+                "qq_allowed_user_ids_count": len(cfg.get("qq_allowed_user_ids", []) or []),
+            },
+            "next_action": "请补充缺失字段；已存在字段可不传以保留原值。",
+        }
+
+    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    valid: bool | None = None
+    details: dict = {}
+    try:
+        resp = requests.post(
+            "https://bots.qq.com/app/getAppAccessToken",
+            json={
+                "appId": effective_app_id,
+                "clientSecret": effective_app_secret,
+            },
+            timeout=10,
+        )
+        body = resp.json() if "application/json" in resp.headers.get("content-type", "") else {}
+        if resp.status_code == 200 and body.get("access_token"):
+            valid = True
+            details = {"expires_in": body.get("expires_in")}
+        else:
+            valid = False
+            details = {"http_status": resp.status_code, "response": body or resp.text[:300]}
+    except Exception as e:
+        valid = None
+        details = {"error": str(e)}
+
+    result = {
+        "saved": True,
+        "valid": valid,
+        "details": details,
+        "app_id_set": bool(effective_app_id),
+        "app_secret_set": bool(effective_app_secret),
+        "allowed_user_ids_set": cfg.get("qq_allowed_user_ids", []),
+        "next_steps": [
+            "请让要加入白名单的 QQ 账号给 Bot 发送一条消息，获取「QQ 用户标识」。",
+            "把该用户标识回填给我（可直接调用 qq_add_user 或 setup_qq 填 qq_allowed_user_ids）。",
+        ],
+    }
+    allowed_ids = cfg.get("qq_allowed_user_ids", []) or []
+    if not allowed_ids:
+        result["tip"] = (
+            "当前白名单为空，Bot 启动后允许所有人对话。"
+            "如需限制：先让目标用户给 Bot 发一条消息，获取其「QQ 用户标识」，"
+            "再用 setup_qq 补填 qq_allowed_user_ids。"
+            "注意这里填的是用户标识（openid/id），不是 QQ 号。"
+        )
+    else:
+        result["tip"] = (
+            f"当前已设置 {len(allowed_ids)} 个白名单用户标识。"
+            "仅列表内用户可用 Bot。"
+            "若需调整，请再次调用 setup_qq 更新 qq_allowed_user_ids。"
+        )
+    return result
+
+
+def _load_cfg_for_qq_users() -> dict:
+    if not CONFIG_PATH.exists():
+        return {}
+    try:
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_cfg_for_qq_users(cfg: dict) -> None:
+    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _normalized_qq_user_list(raw: list | None) -> list[str]:
+    values = raw or []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        user_id = str(item).strip()
+        if not user_id or user_id in seen:
+            continue
+        seen.add(user_id)
+        out.append(user_id)
+    return out
+
+
+def tool_qq_add_user(qq_user_id: str = "") -> dict:
+    """
+    向 QQ 白名单添加一个用户标识（openid/id）。
+    """
+    user_id = str(qq_user_id).strip()
+    if not user_id:
+        return {
+            "saved": False,
+            "action_required": True,
+            "message": "请先让要添加的 QQ 账号给 Bot 发一条消息。",
+            "next_action": (
+                "用户会在机器人提示或日志里看到「QQ 用户标识」。"
+                "把该标识回填给我后，我再调用 qq_add_user 完成添加。"
+            ),
+            "note": "这里需要的是用户标识（openid/id），不是 QQ 号。",
+        }
+
+    cfg = _load_cfg_for_qq_users()
+    existing = _normalized_qq_user_list(cfg.get("qq_allowed_user_ids", []))
+    if user_id in existing:
+        return {
+            "saved": True,
+            "added": False,
+            "message": "该用户标识已在白名单中。",
+            "qq_allowed_user_ids": existing,
+            "count": len(existing),
+        }
+
+    existing.append(user_id)
+    cfg["qq_allowed_user_ids"] = existing
+    _save_cfg_for_qq_users(cfg)
+    return {
+        "saved": True,
+        "added": True,
+        "qq_allowed_user_ids": existing,
+        "count": len(existing),
+        "next_steps": [
+            "已加入 QQ 白名单。",
+            "请重启 `sjtu-agent qq-bot` 使白名单变更生效。",
+        ],
+    }
+
+
+def tool_qq_list_users() -> dict:
+    """
+    列出 QQ 白名单用户标识。
+    """
+    cfg = _load_cfg_for_qq_users()
+    users = _normalized_qq_user_list(cfg.get("qq_allowed_user_ids", []))
+    return {
+        "qq_allowed_user_ids": users,
+        "count": len(users),
+        "allow_all": len(users) == 0,
+        "tip": (
+            "白名单为空时表示允许所有用户。"
+            if not users
+            else "仅列表内用户可使用 QQ Bot。"
+        ),
+    }
+
+
+def tool_qq_remove_user(qq_user_id: str) -> dict:
+    """
+    从 QQ 白名单删除一个用户标识（openid/id）。
+    """
+    user_id = str(qq_user_id).strip()
+    if not user_id:
+        return {"saved": False, "error": "qq_user_id 不能为空。"}
+
+    cfg = _load_cfg_for_qq_users()
+    existing = _normalized_qq_user_list(cfg.get("qq_allowed_user_ids", []))
+    if user_id not in existing:
+        return {
+            "saved": True,
+            "removed": False,
+            "message": "该用户标识不在白名单中。",
+            "qq_allowed_user_ids": existing,
+            "count": len(existing),
+        }
+
+    kept = [item for item in existing if item != user_id]
+    cfg["qq_allowed_user_ids"] = kept
+    _save_cfg_for_qq_users(cfg)
+    return {
+        "saved": True,
+        "removed": True,
+        "qq_allowed_user_ids": kept,
+        "count": len(kept),
+        "next_steps": [
+            "已从 QQ 白名单移除。",
+            "请重启 `sjtu-agent qq-bot` 使白名单变更生效。",
+        ],
+    }
+
+
 def tool_fetch_url(url: str) -> dict:
     """
     抓取网页内容并提取纯文本。
@@ -4626,7 +4927,11 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "get_user_profile":         r = tool_get_user_profile()
         elif name == "setup_telegram":           r = tool_setup_telegram(**args)
         elif name == "setup_wechat":             r = tool_setup_wechat()
-        elif name == "setup_feishu":           r = tool_setup_feishu(**args)
+        elif name == "setup_feishu":             r = tool_setup_feishu(**args)
+        elif name == "setup_qq":                 r = tool_setup_qq(**args)
+        elif name == "qq_add_user":              r = tool_qq_add_user(**args)
+        elif name == "qq_list_users":            r = tool_qq_list_users()
+        elif name == "qq_remove_user":           r = tool_qq_remove_user(**args)
         else:                               r = {"error": f"未知工具: {name}"}
     except Exception as e:
         r = {"error": str(e)}

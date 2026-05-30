@@ -425,7 +425,25 @@ browse_mysjtu 的使用场景：成绩、绩点、奖学金、培养方案、注
    - 运行 `sjtu-agent feishu-bot` 启动 Bot（WebSocket 长连接模式，无需公网 IP）
    - 在飞书中搜索创建的应用名，进入机器人对话窗口，直接发消息即可
    - 需要后台常驻时运行 `sjtu-agent install-daemons` 安装守护进程
-6. Bot 功能与终端版本完全相同：查 DDL、看课表、查成绩、搜索校园内容、接收日报推送等"""
+6. Bot 功能与终端版本完全相同：查 DDL、看课表、查成绩、搜索校园内容、接收日报推送等
+
+## QQ Bot 配置
+用户说「接入QQ」「配置QQ bot」「QQ机器人」时：
+1. 引导用户先登录 https://q.qq.com/ ，进入机器人平台（OpenClaw）
+2. 指引用户「选择机器人」→「创建机器人」，然后获取 app_id（AppID）和 app_secret（AppSecret）
+3. 收集 app_id 和 app_secret 后调用 setup_qq 保存并验证
+4. 配置成功后告知用户：
+   - 让用户先从 QQ 给 Bot 发送一条消息，获取「QQ 用户标识」
+   - 让用户把该用户标识回填，用于加入白名单
+5. 如需限制可用用户，按白名单流程引导：
+   - 第一次先不填 qq_allowed_user_ids（留空=允许所有人），先跑通收消息链路
+   - 让目标用户给 Bot 发一条消息，记录机器人提示或日志里的「QQ 用户标识」
+   - 再次调用 setup_qq 补填 qq_allowed_user_ids（可传多个）
+   - 明确提醒：qq_allowed_user_ids 填的是 QQ 用户标识（openid/id），不是 QQ 号
+6. QQ 用户管理：
+   - 用户说「增加QQ用户」「添加QQ白名单用户」→ 调用 qq_add_user。若用户还没提供用户标识，先提示该账号给 Bot 发消息，拿到「QQ 用户标识」后回填
+   - 用户说「QQ用户列表」「查看QQ白名单」→ 调用 qq_list_users
+   - 用户说「删除QQ用户」「移除QQ白名单用户」→ 调用 qq_remove_user"""
 
 
 
@@ -518,6 +536,14 @@ _TOOL_LABELS = {
     "setup_wechat":           "正在启动微信扫码登录…",
 
     "setup_feishu":           "正在配置飞书 Bot…",
+
+    "setup_qq":               "正在配置 QQ Bot…",
+
+    "qq_add_user":            "正在添加 QQ 白名单用户…",
+
+    "qq_list_users":          "正在读取 QQ 白名单…",
+
+    "qq_remove_user":         "正在删除 QQ 白名单用户…",
 
 }
 
