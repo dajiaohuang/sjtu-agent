@@ -98,6 +98,8 @@ sjtu-agent daily-report --test
 sjtu-agent telegram-bot --test
 sjtu-agent remind-check --list
 sjtu-agent mcp --http --port 8765
+sjtu-agent add-mcp-server my-tools --transport stdio --command python --arg D:/path/to/server.py
+sjtu-agent add-skill my-skill --content-file D:/path/to/SKILL.md
 sjtu-agent install-daemons
 ```
 
@@ -114,6 +116,38 @@ sjtu-agent setup
 sjtu-agent setup --yes --skip-cookie-import --skip-launchd
 sjtu-agent setup --yes --write-daemons-only --output-dir /tmp/sjtu-agent-launchd
 ```
+
+## MCP and Skills
+
+Agent can expose its own tools as an MCP server, and it can also load external MCP servers as extra tools. External MCP server config lives in `config.json` under `mcp_servers`; enabled prompt-only skills live under `skills.enabled`.
+
+Add any custom MCP server:
+
+```bash
+sjtu-agent add-mcp-server my-tools --transport stdio --command python --arg D:/path/to/server.py
+sjtu-agent add-mcp-server remote-tools --transport sse --url http://127.0.0.1:8765/sse
+```
+
+You can also ask the chat agent to "add a custom MCP server". The first
+chat-triggered call only warns that an external command or URL will be trusted;
+the agent should proceed only after explicit confirmation.
+
+Add a custom prompt-only skill:
+
+```bash
+sjtu-agent add-skill my-skill --content-file D:/path/to/SKILL.md
+sjtu-agent list-skills
+sjtu-agent manage-skill disable my-skill
+```
+
+You can also ask the chat agent to add a skill and provide either the full
+`SKILL.md` content or a local source file path.
+
+For a more agent-native flow, ask the chat agent to "create a skill" and
+describe the behavior you want. If the requirement is not clear enough, the
+agent asks follow-up questions; once it has a name, trigger, and instructions it
+uses `create_skill`. You can also ask it to list, enable, disable, or delete
+skills through `list_skills` and `manage_skill`.
 
 ## macOS 后台服务
 
@@ -255,57 +289,6 @@ psmux -L sjtu-agent ls
 | 回 "permission denied" / 报权限错 | 权限管理里漏申请了 `im:message:send_as_bot` |
 | 想验证 App ID/Secret 对不对 | 终端跑 `sjtu-agent feishu-bot -- --test`（注意中间的 `--`） |
 | 想查自己的 open_id | 终端跑 `sjtu-agent feishu-bot -- --whoami`，然后随便发条消息 |
-
-### 飞书 Bot 斜杠命令
-
-Bot 支持以下斜杠命令，在对话中直接输入即可：
-
-**对话管理**
-
-| 命令 | 功能 |
-|------|------|
-| `/new <名称>` | 创建新对话并切换 |
-| `/list` | 列出所有对话 |
-| `/switch <序号>` | 切换活跃对话 |
-| `/name <序号> <名称>` | 重命名对话 |
-| `/delete <序号>` | 删除对话 |
-| `/history` | 查看当前对话最近消息 |
-| `/help` | 显示所有命令帮助 |
-
-**作业助手（需配置 Claude Code CLI）**
-
-| 命令 | 功能 |
-|------|------|
-| `/hw` | 列出未提交的 Canvas 作业 |
-| `/hw past` | 列出历史作业（已过期） |
-| `/hw do <序号>` | 下载并解答指定作业（调用本地 Claude Code） |
-| `/hw past do <序号>` | 解答指定历史作业 |
-| `/hw brief <序号>` | 仅查看作业摘要 |
-| `/hw due <N>` | 列出 N 天内到期的作业 |
-
-解答结果输出到 `SJTU_HOMEWORK_DIR`（默认 `%APPDATA%/sjtu-agent/assignments`，可通过 `.env` 配置）。包含 `_解答.md`、代码文件（`.py` 等）以及 Claude Code 自动生成的 HTML 文件。
-
-### 作业助手工作原理
-
-1. 用户在飞书发送 `/hw do <序号>`
-2. Bot 通过 Canvas API 下载作业题目（`description.html` + 附件）
-3. 调用本地 **Claude Code CLI**（`claude -p`）在作业目录中解题
-4. Claude Code 读取题目、写出解答、生成代码文件
-5. 摘要返回飞书，完整解答保存到本地目录
-
-> **前置条件**：本机需安装 Claude Code（`npm install -g @anthropic-ai/claude-code`）并配置 API Key。
-
-### MATLAB 图表生成（可选）
-
-若本机安装了 MATLAB（R2020a+），Claude Code 在做作业时可自动调用 MATLAB 生成高质量矢量图表并嵌入 PDF 解答：
-
-1. Claude Code 编写 `_figures.m` 脚本（`figure(); plot(...); exportgraphics(gcf,'fig1.pdf','ContentType','vector')`）
-2. 通过 `matlab -batch` 运行脚本，生成矢量 PDF 图片
-3. 在 `_解答.tex` 中用 `\includegraphics{fig1.pdf}` 嵌入，xelatex 编译后图表无损整合到 PDF 中
-
-MATLAB 路径可通过 `MATLAB_PATH` 环境变量自定义，未设置时自动搜索常见安装位置。若未安装 MATLAB，Claude Code 将回退到 Matplotlib。
-
-> MiKTeX（`winget install MiKTeX.MiKTeX`）用于 xelatex 编译 LaTeX 生成 PDF。需额外安装 ctex 中文宏包：`mpm --install ctex`。
 
 ## 配置说明
 

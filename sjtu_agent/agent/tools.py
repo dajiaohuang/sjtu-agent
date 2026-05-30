@@ -29,6 +29,8 @@ from sjtu_agent.paths import (
     DDL_CACHE_PATH,
     ENV_PATH,
     MYSJTU_CATALOG_PATH,
+    PACKAGE_ROOT,
+    PROJECT_ROOT,
     REMINDERS_PATH,
     USER_PROFILE_PATH,
     atomic_write_json,
@@ -100,6 +102,130 @@ TOOLS = [
             "name": "setup_shuiyuan",
             "description": "交互式授权水源社区 Discourse User API Key。会自动打开浏览器，用户在页面点击授权后自动完成，无需手动操作。用户说'配置水源'/'授权水源'/'设置水源'时调用。",
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_mcp_server",
+            "description": (
+                "Register a custom external MCP server in config.json. "
+                "Use when the user asks to add/connect/configure a custom MCP server. "
+                "The first chat-triggered call must leave acknowledge_external_mcp=false "
+                "so the user is warned before an external command or URL is trusted."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "server_id": {"type": "string", "description": "Short MCP server id, e.g. filesystem or my_tools."},
+                    "transport": {
+                        "type": "string",
+                        "enum": ["stdio", "sse", "streamable_http", "http"],
+                        "description": "MCP transport. Defaults to stdio.",
+                    },
+                    "command": {"type": "string", "description": "Command for stdio transport, e.g. python or node."},
+                    "args": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Command arguments for stdio transport.",
+                    },
+                    "url": {"type": "string", "description": "MCP endpoint URL for sse/http transports."},
+                    "cwd": {"type": "string", "description": "Optional working directory for stdio transport."},
+                    "env": {"type": "object", "description": "Optional environment variables for stdio transport."},
+                    "headers": {"type": "object", "description": "Optional HTTP headers for sse/http transports."},
+                    "enabled": {"type": "boolean", "description": "Whether to enable immediately. Defaults to true."},
+                    "call_timeout": {"type": "integer", "description": "Tool call timeout in seconds. Defaults to 120."},
+                    "acknowledge_external_mcp": {
+                        "type": "boolean",
+                        "description": "Must be true before saving from chat after the external MCP warning.",
+                    },
+                },
+                "required": ["server_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_skill",
+            "description": (
+                "Create or update a custom prompt-only skill under the sjtu-agent data directory "
+                "and optionally enable it. Use when the user asks to add a custom skill."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Skill directory name, e.g. my-skill."},
+                    "content": {"type": "string", "description": "SKILL.md content to write."},
+                    "source_file": {"type": "string", "description": "Optional local file path to read SKILL.md content from."},
+                    "enabled": {"type": "boolean", "description": "Whether to add the skill to skills.enabled. Defaults to true."},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_skill",
+            "description": (
+                "Create a prompt-only skill from a user's natural-language requirements. "
+                "If the requirement is underspecified, return follow-up questions instead "
+                "of writing a skill. Use when the user asks for skill creator / create a skill."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Short skill id, e.g. exam-planner."},
+                    "purpose": {"type": "string", "description": "What user need should trigger this skill."},
+                    "triggers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Example phrases or situations that should activate this skill.",
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "description": "Concrete instructions the agent should follow when the skill is active.",
+                    },
+                    "constraints": {"type": "string", "description": "Optional boundaries, safety notes, or style constraints."},
+                    "examples": {"type": "string", "description": "Optional examples of good use."},
+                    "content": {"type": "string", "description": "Optional full SKILL.md content. Overrides generated content."},
+                    "enabled": {"type": "boolean", "description": "Whether to enable after creation. Defaults to true."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_skills",
+            "description": "List available prompt-only skills, their enabled state, source, and SKILL.md path.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_content": {
+                        "type": "boolean",
+                        "description": "Whether to include SKILL.md text snippets. Defaults to false.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_skill",
+            "description": "Enable, disable, or delete a prompt-only skill. Deletion is limited to user-data skills.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["enable", "disable", "delete"]},
+                    "name": {"type": "string", "description": "Skill name / directory id."},
+                },
+                "required": ["action", "name"],
+            },
         },
     },
     {
@@ -1671,6 +1797,371 @@ def tool_setup_shuiyuan() -> dict:
     return _setup_shuiyuan_session(cfg, username, password)
 
 
+def _normalize_config_list(value) -> list:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list):
+        return [str(x) for x in value if str(x).strip()]
+    return []
+
+
+def _valid_config_id(value: str, label: str) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        raise ValueError(f"{label} is required")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", cleaned):
+        raise ValueError(f"{label} may only contain letters, numbers, dot, underscore, and hyphen")
+    return cleaned
+
+
+def tool_add_mcp_server(
+    server_id: str,
+    transport: str = "stdio",
+    command: str = "",
+    args: list | None = None,
+    url: str = "",
+    cwd: str = "",
+    env: dict | None = None,
+    headers: dict | None = None,
+    enabled: bool = True,
+    call_timeout: int = 120,
+    acknowledge_external_mcp: bool = False,
+) -> dict:
+    """Register a custom MCP server in config.json."""
+    server_id = _valid_config_id(server_id, "server_id")
+    transport = (transport or "stdio").strip().lower()
+    if transport not in {"stdio", "sse", "streamable_http", "http"}:
+        return {"error": f"Unsupported MCP transport: {transport}"}
+
+    args = _normalize_config_list(args)
+    env = env if isinstance(env, dict) else {}
+    headers = headers if isinstance(headers, dict) else {}
+    call_timeout = max(1, int(call_timeout or 120))
+
+    if transport == "stdio":
+        command = (command or "").strip()
+        if not command:
+            return {"error": "stdio MCP server requires `command`."}
+        external_target = " ".join([command, *args]).strip()
+    else:
+        url = (url or "").strip()
+        if not url:
+            return {"error": f"{transport} MCP server requires `url`."}
+        if not url.startswith(("http://", "https://")):
+            return {"error": "MCP URL must start with http:// or https://"}
+        external_target = url
+
+    if not acknowledge_external_mcp:
+        return {
+            "requires_confirmation": True,
+            "server_id": server_id,
+            "transport": transport,
+            "external_target": external_target,
+            "message": (
+                "This will register an external MCP server. The agent may execute the configured "
+                "stdio command or send requests to the configured HTTP endpoint when tools are used."
+            ),
+            "next_action": (
+                "Tell the user the exact external command or URL above. Only call add_mcp_server "
+                "again with acknowledge_external_mcp=true after the user explicitly confirms."
+            ),
+        }
+
+    cfg = read_json_safe(CONFIG_PATH, {})
+    mcp_servers = cfg.get("mcp_servers", {})
+    if not isinstance(mcp_servers, dict):
+        mcp_servers = {}
+
+    server_cfg: dict = {
+        "enabled": bool(enabled),
+        "transport": transport,
+        "call_timeout": call_timeout,
+    }
+    if transport == "stdio":
+        server_cfg.update({"command": command, "args": args})
+        if cwd:
+            server_cfg["cwd"] = str(Path(os.path.expandvars(cwd)).expanduser())
+        if env:
+            server_cfg["env"] = {str(k): str(v) for k, v in env.items()}
+    else:
+        server_cfg["url"] = url
+        if headers:
+            server_cfg["headers"] = {str(k): str(v) for k, v in headers.items()}
+
+    mcp_servers[server_id] = server_cfg
+    cfg["mcp_servers"] = mcp_servers
+    atomic_write_json(CONFIG_PATH, cfg)
+
+    try:
+        from sjtu_agent.extensions.mcp_client import list_openai_tools
+        list_openai_tools(force_refresh=True)
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "server_id": server_id,
+        "config": server_cfg,
+        "tool_prefix": f"mcp__{server_id}__",
+        "next_action": "Restart or continue the conversation; MCP tools will be rediscovered automatically.",
+    }
+
+
+def tool_add_skill(
+    name: str,
+    content: str = "",
+    source_file: str = "",
+    enabled: bool = True,
+) -> dict:
+    """Create/update a prompt-only skill and optionally enable it."""
+    name = _valid_config_id(name, "name")
+    source_file = (source_file or "").strip()
+    if source_file:
+        path = Path(os.path.expandvars(source_file)).expanduser()
+        if not path.exists() or not path.is_file():
+            return {"error": f"source_file not found: {source_file}"}
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return {"error": f"failed to read source_file: {exc}"}
+    if not (content or "").strip():
+        return {"error": "Skill content is required. Provide content or source_file."}
+
+    skill_dir = CONFIG_PATH.parent / "skills" / name
+    skill_file = skill_dir / "SKILL.md"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_file.write_text(content.strip() + "\n", encoding="utf-8")
+
+    cfg = read_json_safe(CONFIG_PATH, {})
+    skills_cfg = cfg.get("skills", {})
+    if not isinstance(skills_cfg, dict):
+        skills_cfg = {}
+    enabled_skills = _normalize_config_list(skills_cfg.get("enabled", []))
+    if enabled and name not in enabled_skills:
+        enabled_skills.append(name)
+    if not enabled and name in enabled_skills:
+        enabled_skills.remove(name)
+    skills_cfg["enabled"] = enabled_skills
+    cfg["skills"] = skills_cfg
+    atomic_write_json(CONFIG_PATH, cfg)
+
+    return {
+        "ok": True,
+        "name": name,
+        "path": str(skill_file),
+        "enabled": bool(enabled),
+        "next_action": "The skill prompt will be included in newly built system prompts.",
+    }
+
+
+def _slugify_skill_name(text: str) -> str:
+    words = re.findall(r"[A-Za-z0-9]+", text.lower())
+    return "-".join(words[:5])
+
+
+def _render_skill_content(
+    name: str,
+    purpose: str,
+    triggers: list | None,
+    instructions: str,
+    constraints: str = "",
+    examples: str = "",
+) -> str:
+    lines = [
+        f"# {name}",
+        "",
+        f"Use this skill when {purpose.strip()}",
+    ]
+    trigger_items = _normalize_config_list(triggers)
+    if trigger_items:
+        lines.extend(["", "## Triggers"])
+        lines.extend(f"- {item}" for item in trigger_items)
+    lines.extend(["", "## Instructions", instructions.strip()])
+    if (constraints or "").strip():
+        lines.extend(["", "## Constraints", constraints.strip()])
+    if (examples or "").strip():
+        lines.extend(["", "## Examples", examples.strip()])
+    return "\n".join(lines).strip() + "\n"
+
+
+def tool_create_skill(
+    name: str = "",
+    purpose: str = "",
+    triggers: list | None = None,
+    instructions: str = "",
+    constraints: str = "",
+    examples: str = "",
+    content: str = "",
+    enabled: bool = True,
+) -> dict:
+    """Create a prompt-only skill from structured requirements, or ask for missing details."""
+    purpose = (purpose or "").strip()
+    instructions = (instructions or "").strip()
+    content = (content or "").strip()
+    questions: list[str] = []
+
+    if not (name or "").strip():
+        derived = _slugify_skill_name(purpose or instructions)
+        name = derived
+    if not (name or "").strip():
+        questions.append("What short skill name should be used, e.g. exam-planner?")
+    if not purpose and not content:
+        questions.append("What user need or situation should trigger this skill?")
+    if not instructions and not content:
+        questions.append("What should the agent do step by step when this skill is active?")
+
+    if questions:
+        return {
+            "requires_more_info": True,
+            "questions": questions,
+            "next_action": "Ask the user these questions, then call create_skill again with the clarified details.",
+        }
+
+    name = _valid_config_id(name, "name")
+    if not content:
+        content = _render_skill_content(
+            name=name,
+            purpose=purpose,
+            triggers=triggers,
+            instructions=instructions,
+            constraints=constraints,
+            examples=examples,
+        )
+    result = tool_add_skill(name=name, content=content, enabled=enabled)
+    if result.get("ok"):
+        result["created_by"] = "create_skill"
+    return result
+
+
+def _configured_skill_dirs_for_tools() -> list[tuple[str, Path]]:
+    cfg = read_json_safe(CONFIG_PATH, {})
+    skills_cfg = cfg.get("skills", {})
+    if not isinstance(skills_cfg, dict):
+        skills_cfg = {}
+
+    dirs: list[tuple[str, Path]] = [
+        ("bundled", PACKAGE_ROOT / "skills"),
+        ("repo", PROJECT_ROOT / "skills"),
+        ("user", CONFIG_PATH.parent / "skills"),
+    ]
+    extra_dirs = skills_cfg.get("dirs", [])
+    if isinstance(extra_dirs, list):
+        for item in extra_dirs:
+            if isinstance(item, str) and item.strip():
+                dirs.append(("extra", Path(os.path.expandvars(item)).expanduser()))
+
+    seen: set[str] = set()
+    result: list[tuple[str, Path]] = []
+    for source, path in dirs:
+        try:
+            key = str(path.resolve())
+        except OSError:
+            key = str(path)
+        if key not in seen:
+            seen.add(key)
+            result.append((source, path))
+    return result
+
+
+def _skill_summary(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip().lstrip("#").strip()
+        if stripped:
+            return stripped[:240]
+    return ""
+
+
+def tool_list_skills(include_content: bool = False) -> dict:
+    """List all discovered prompt-only skills."""
+    cfg = read_json_safe(CONFIG_PATH, {})
+    skills_cfg = cfg.get("skills", {})
+    if not isinstance(skills_cfg, dict):
+        skills_cfg = {}
+    enabled_names = _normalize_config_list(skills_cfg.get("enabled", []))
+    enable_all = "*" in enabled_names
+    enabled_set = set(enabled_names)
+
+    entries: list[dict] = []
+    seen: set[str] = set()
+    for source, base in _configured_skill_dirs_for_tools():
+        if not base.exists():
+            continue
+        for skill_file in sorted(base.glob("*/SKILL.md")):
+            name = skill_file.parent.name
+            key = str(skill_file.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                text = skill_file.read_text(encoding="utf-8")
+            except OSError:
+                text = ""
+            item = {
+                "name": name,
+                "enabled": enable_all or name in enabled_set,
+                "source": source,
+                "path": str(skill_file),
+                "summary": _skill_summary(text),
+            }
+            if include_content:
+                item["content"] = text
+            entries.append(item)
+
+    return {
+        "ok": True,
+        "enabled": enabled_names,
+        "skill_dirs": [{"source": source, "path": str(path)} for source, path in _configured_skill_dirs_for_tools()],
+        "skills": entries,
+    }
+
+
+def tool_manage_skill(action: str, name: str) -> dict:
+    """Enable, disable, or delete a prompt-only skill."""
+    import shutil
+
+    action = (action or "").strip().lower()
+    if action not in {"enable", "disable", "delete"}:
+        return {"error": "action must be one of: enable, disable, delete"}
+    name = _valid_config_id(name, "name")
+
+    cfg = read_json_safe(CONFIG_PATH, {})
+    skills_cfg = cfg.get("skills", {})
+    if not isinstance(skills_cfg, dict):
+        skills_cfg = {}
+    enabled_skills = _normalize_config_list(skills_cfg.get("enabled", []))
+
+    if action == "enable" and name not in enabled_skills:
+        enabled_skills.append(name)
+    elif action in {"disable", "delete"} and name in enabled_skills:
+        enabled_skills.remove(name)
+
+    deleted = False
+    if action == "delete":
+        user_root = (CONFIG_PATH.parent / "skills").resolve()
+        skill_dir = (user_root / name).resolve()
+        if not skill_dir.is_relative_to(user_root):
+            return {"error": "refusing to delete a skill outside the user skill directory"}
+        if not skill_dir.exists():
+            return {"error": f"user skill not found: {name}"}
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_file.exists():
+            return {"error": f"user skill has no SKILL.md: {name}"}
+        shutil.rmtree(skill_dir)
+        deleted = True
+
+    skills_cfg["enabled"] = enabled_skills
+    cfg["skills"] = skills_cfg
+    atomic_write_json(CONFIG_PATH, cfg)
+
+    return {
+        "ok": True,
+        "action": action,
+        "name": name,
+        "enabled": name in enabled_skills,
+        "deleted": deleted,
+    }
+
+
 def _setup_shuiyuan_session(cfg: dict, username: str, password: str) -> dict:
     """降级方案：Playwright 登录水源，保存 session cookie。"""
     manual_note = (
@@ -2178,7 +2669,7 @@ def _ddl_cache_get(cache_key: str) -> list | None:
     return result
 
 
-def _ddl_cache_set(cache_key: str, data: list, errors: list | None = None) -> None:
+def _ddl_cache_set(cache_key: str, data: list) -> None:
     """将 data 写入磁盘缓存（datetime 自动序列化为 ISO 格式字符串）。"""
     import time as _t
     import datetime as _dt
@@ -2191,7 +2682,7 @@ def _ddl_cache_set(cache_key: str, data: list, errors: list | None = None) -> No
     store = _ddl_cache_load()
     import json as _json
     serializable = _json.loads(_json.dumps(data, default=_serialize))
-    store[cache_key] = {"ts": _t.time(), "data": serializable, "errors": errors or []}
+    store[cache_key] = {"ts": _t.time(), "data": serializable}
     _ddl_cache_save(store)
 
 
@@ -2204,11 +2695,7 @@ def _fetch_ddls_parallel(cfg: dict, skip_canvas=False, skip_aihaoke=False, skip_
     cache_key = f"{skip_canvas},{skip_aihaoke},{skip_icourse}"
     cached = _ddl_cache_get(cache_key)
     if cached is not None:
-        # 兼容旧缓存格式（v0.1.0 之前存的是纯 list）
-        if isinstance(cached, list):
-            return cached, []
-        # 缓存命中时 errors 为空（cache = 历史成功的拉取）
-        return cached, []
+        return cached
 
     tasks = []
     if not skip_canvas:   tasks.append(("canvas",  lambda: dc.fetch_canvas(cfg)))
@@ -2216,9 +2703,8 @@ def _fetch_ddls_parallel(cfg: dict, skip_canvas=False, skip_aihaoke=False, skip_
     if not skip_icourse:  tasks.append(("icourse", lambda: dc.fetch_icourse(cfg)))
 
     all_ddl: list = []
-    errors: list[str] = []
     if not tasks:
-        return all_ddl, errors
+        return all_ddl
 
     with _cf.ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         futures = {pool.submit(fn): name for name, fn in tasks}
@@ -2226,12 +2712,10 @@ def _fetch_ddls_parallel(cfg: dict, skip_canvas=False, skip_aihaoke=False, skip_
             try:
                 all_ddl.extend(fut.result())
             except Exception as e:
-                msg = f"{futures[fut]} 拉取失败：{e}"
-                print(f"[DDL] {msg}")
-                errors.append(msg)
+                print(f"[DDL] {futures[fut]} 拉取失败：{e}")
 
-    _ddl_cache_set(cache_key, all_ddl, errors)
-    return all_ddl, errors
+    _ddl_cache_set(cache_key, all_ddl)
+    return all_ddl
 
 
 def _prefetch_ddls_background() -> None:
@@ -2335,12 +2819,11 @@ def tool_get_ddls(skip_canvas=False, skip_aihaoke=False, skip_icourse=False):
     import datetime as _dt
     cfg = dc.load_config()
     now = _dt.datetime.now(dc.CST)
-    all_ddl, errors = _fetch_ddls_parallel(cfg, skip_canvas, skip_aihaoke, skip_icourse)
+    all_ddl = _fetch_ddls_parallel(cfg, skip_canvas, skip_aihaoke, skip_icourse)
     all_ddl.sort(key=lambda x: x["due"])
     warnings = []
     if not skip_canvas and not (cfg.get("canvas_token") and not cfg.get("canvas_token", "").startswith("YOUR_")):
         warnings.append("Canvas 未配置 token；请先调用 setup_canvas 获取引导，生成后再用 save_credentials 保存。")
-    warnings.extend(errors)
     return {
         "current_time": now.strftime("%Y-%m-%d %H:%M"),
         "ddls": [_serialize_ddl(x, now) for x in all_ddl if not x.get("submitted")],
@@ -2360,7 +2843,7 @@ def tool_get_all(skip_canvas=False, skip_aihaoke=False, skip_icourse=False, skip
     with _cf.ThreadPoolExecutor(max_workers=2) as pool:
         ddl_fut = pool.submit(_fetch_ddls_parallel, cfg, skip_canvas, skip_aihaoke, skip_icourse)
         lab_fut = pool.submit(dc.fetch_phycai, cfg) if not skip_phycai else None
-        all_ddl, errors = ddl_fut.result()
+        all_ddl = ddl_fut.result()
         lab = lab_fut.result() if lab_fut else None
 
     import datetime as _dt
@@ -2369,7 +2852,6 @@ def tool_get_all(skip_canvas=False, skip_aihaoke=False, skip_icourse=False, skip
     warnings = []
     if not skip_canvas and not (cfg.get("canvas_token") and not cfg.get("canvas_token", "").startswith("YOUR_")):
         warnings.append("Canvas 未配置 token；请先调用 setup_canvas 获取引导，生成后再用 save_credentials 保存。")
-    warnings.extend(errors)
     return {
         "current_time": now.strftime("%Y-%m-%d %H:%M"),
         "ddls": [_serialize_ddl(x, now) for x in all_ddl if not x.get("submitted")],
@@ -3750,10 +4232,9 @@ def tool_execute_python(code: str, timeout: int = 60) -> dict:
     import sys as _sys
 
     # 注入基础 import 路径
-    from sjtu_agent.paths import PROJECT_ROOT
     preamble = (
         "import sys, os\n"
-        f"sys.path.insert(0, {str(PROJECT_ROOT)!r})\n"
+        f"sys.path.insert(0, {str(ROOT)!r})\n"
         "from pathlib import Path\n"
         "from dotenv import load_dotenv\n"
         f"load_dotenv({str(ENV_PATH)!r})\n"
@@ -4103,6 +4584,9 @@ def tool_submit_canvas_assignment(
 
 def run_tool(name: str, args: dict) -> str:
     try:
+        if name.startswith("mcp__"):
+            from sjtu_agent.extensions.mcp_client import call_tool
+            return call_tool(name, args or {})
         if   name == "check_setup":         r = tool_check_setup()
         elif name == "save_credentials":    r = tool_save_credentials(**args)
         elif name == "setup_canvas":        r = tool_setup_canvas(**args)
@@ -4117,6 +4601,11 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "read_shuiyuan_topic":   r = tool_read_shuiyuan_topic(**args)
         elif name == "get_schedule":          r = tool_get_schedule(**args)
         elif name == "setup_shuiyuan":        r = tool_setup_shuiyuan()
+        elif name == "add_mcp_server":        r = tool_add_mcp_server(**args)
+        elif name == "add_skill":             r = tool_add_skill(**args)
+        elif name == "create_skill":          r = tool_create_skill(**args)
+        elif name == "list_skills":           r = tool_list_skills(**args)
+        elif name == "manage_skill":          r = tool_manage_skill(**args)
         elif name == "setup_course_community": r = tool_setup_course_community(**args)
         elif name == "search_courses":        r = tool_search_courses(**args)
         elif name == "get_course_detail":     r = tool_get_course_detail(**args)
