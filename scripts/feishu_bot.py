@@ -214,10 +214,10 @@ _FS_CTX = (
     "💬 **对话管理**：/new /list /switch /name /delete /history\n"
     "🔍 **校园搜索**：教务处通知、水源社区、选课社区评价\n"
     "💡 特别提及 /hw do 可调用 Claude Code 自动解题（最新功能）。\n"
-    "\n"
-    "## 近期更新回复（铁律）\n"
-    "用户问「最近更新了什么」「有什么新功能」「新版变化」时，**只允许回复以下内容，不得改动、不得增删、不得自由发挥**：\n"
-    "\n"
+)
+
+
+_RECENT_UPDATES_TEXT = (
     "🔥 **近期更新一览**\n\n"
     "- **🤖 QQ Bot 接入**：支持通过 QQ 机器人平台接入，含白名单管理\n"
     "- **🧩 MCP 与 Skills 扩展**：动态工具注册，自定义 MCP Server 和 prompt-only 技能\n"
@@ -227,7 +227,7 @@ _FS_CTX = (
     "- **🔢 序号从 1 开始**：对话列表和作业列表统一使用 1-based 编号\n"
     "- **✅ CI 流水线**：GitHub Actions 自动测试（Python 3.11/3.13）\n"
     "\n"
-    "输入 /help 查看所有命令~\n"
+    "输入 /help 查看所有命令~"
 )
 
 
@@ -759,6 +759,12 @@ def _handle_commands(open_id: str, text: str) -> str | None:
         if ctx:
             return _do_hw_answer(open_id)
         return "[homework] 请先用 /hw do <序号> 分析作业，再要答案哦~"
+    # 自然语言触发"近期更新"
+    t = text.strip()
+    update_phrases = {"最近更新了什么", "最近更新", "有什么新功能", "新版变化",
+                      "更新了什么功能", "有什么更新", "新功能有哪些", "最近更新了什么功能"}
+    if t in update_phrases or t.endswith("更新了什么功能"):
+        return _RECENT_UPDATES_TEXT
     if not text.startswith("/"):
         return None
     parts = text.strip().split(maxsplit=2)
