@@ -79,6 +79,10 @@ _sessions: dict[str, dict] = {}
 _locks: dict[str, threading.Lock] = {}
 _sess_meta_lock = threading.Lock()
 
+# ── 作业解答上下文（记住最近一次 /hw do，供"给我答案"使用）────────────────
+_hw_context: dict[str, dict] = {}
+_hw_ctx_lock = threading.Lock()
+
 # ── 会话持久化 ──────────────────────────────────────────────────────────────
 from sjtu_agent.paths import DATA_DIR
 _SESSIONS_FILE = DATA_DIR / "feishu_sessions.json"
@@ -190,6 +194,7 @@ _FS_CTX = (
     "## 斜杠命令（用户输入 / 开头即可触发，主动引导使用）\n"
     "遇到以下需求时，主动建议用户使用斜杠命令而非让 LLM 代劳：\n"
     "- 做作业/写作业/作业答案/帮我做XX/解题/帮我看题 → /hw do <序号> 或先 /hw\n"
+    "- 给我答案/核对答案/我要答案 → 获取完整解答（需先运行 /hw do）\n"
     "- 查看作业/有什么作业/列出作业/功课 → /hw 或 /hw list\n"
     "- N天内到期/即将截止/最近作业 → /hw due <N>\n"
     "- 历史作业/已交作业/以前作业 → /hw past\n"
@@ -718,8 +723,28 @@ def _extract_text(content_json: str) -> str:
 
 # ── 多对话命令处理 ──────────────────────────────────────────────────────────
 
+def _do_hw_answer(open_id: str) -> str:
+    """执行 /hw answer 或自然语言触发"给我答案"。"""
+    with _hw_ctx_lock:
+        ctx = _hw_context.get(open_id, {})
+    if not ctx:
+        return "[homework] 请先用 /hw do <序号> 分析作业。"
+    from sjtu_agent.homework_agent import run_homework_check
+    return "[homework] 📝 正在生成完整解答…\n\n" + run_homework_check(
+        specific_idx=ctx["idx"], answer_mode=True)
+
+
 def _handle_commands(open_id: str, text: str) -> str | None:
     """解析并执行对话管理命令。返回命令结果文本（None 表示不是命令）。"""
+    # 自然语言触发"给我答案"
+    answer_phrases = {"给我答案", "给答案", "核对答案", "我要答案", "获取完整解答",
+                      "看答案", "要答案", "上答案", "出答案"}
+    if text.strip() in answer_phrases:
+        with _hw_ctx_lock:
+            ctx = _hw_context.get(open_id, {})
+        if ctx:
+            return _do_hw_answer(open_id)
+        return "[homework] 请先用 /hw do <序号> 分析作业，再要答案哦~"
     if not text.startswith("/"):
         return None
     parts = text.strip().split(maxsplit=2)
@@ -808,6 +833,7 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 "`/hw brief <序号>`  仅查看摘要\n"
                 "`/hw due <N>`  N 天内到期\n"
                 "`/hw past`  查看历史作业\n"
+                "`/hw answer`  获取完整解答（分析后使用）\n"
                 "`/hw all`  分析全部作业\n"
                 "`/hw list`  列出作业（同 /hw）\n\n"
                 "ℹ️  `/help`  显示此帮助"
@@ -822,7 +848,10 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                     idx = int(parts[2])
                 except ValueError:
                     return f"无效序号：{parts[2]}"
-                return "[homework] 正在解题…\n\n" + run_homework_check(specific_idx=idx)
+                # 记住上下文供"给我答案"使用
+                with _hw_ctx_lock:
+                    _hw_context[open_id] = {"idx": idx}
+                return "[homework] 🧠 解题助手模式…\n\n" + run_homework_check(specific_idx=idx)
             elif sub == "brief":
                 if len(parts) < 3:
                     return "用法：/hw brief <序号>"
@@ -849,6 +878,8 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 return run_homework_check(due_within_days=days, list_only=True)
             elif sub == "all":
                 return run_homework_check(due_within_days=3650, include_past=True, list_only=True)
+            elif sub == "answer":
+                return _do_hw_answer(open_id)
             else:
                 return run_homework_check(list_only=True)
         return f"未知命令：{cmd}。输入 /help 查看可用命令。"
