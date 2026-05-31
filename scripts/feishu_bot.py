@@ -1100,13 +1100,8 @@ def _handle_commands(open_id: str, text: str) -> str | None:
             match = next((t for t in templates if t["name"] == sub), None)
             if not match:
                 return f"模板不存在: {sub}。用 /template 查看可用模板。"
-            # 将模板复制到当前工作目录
-            from pathlib import Path
-            target = Path.cwd()
-            msg = apply_template(sub, target)
-            return (f"{msg}\n\n"
-                    f"模板已就绪。现在发送「帮我格式化成{next((t['description'] for t in templates if t['name']==sub), sub)} PDF」"
-                    f"即可让 Claude Code 自动填入内容并编译。")
+            msg = apply_template(sub)  # 使用 PAPERS_DIR
+            return f"{msg}\n\n把你的文档文件放进去，然后说「帮我格式化」即可。"
         return f"未知命令：{cmd}。输入 /help 查看可用命令。"
 
 

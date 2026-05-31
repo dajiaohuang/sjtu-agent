@@ -119,8 +119,12 @@ def compile_latex(tex_file: Path, work_dir: Path | None = None) -> tuple[bool, s
         return False, f"[xelatex] 异常: {e}"
 
 
-def apply_template(template_name: str, target_dir: Path) -> str:
-    """将模板复制到目标目录，返回操作说明文本。"""
+def apply_template(template_name: str, target_dir: Path | None = None) -> str:
+    """将模板复制到目标目录，返回操作说明文本。默认使用 PAPERS_DIR。"""
+    from sjtu_agent.paths import PAPERS_DIR
+    target_dir = Path(target_dir) if target_dir else PAPERS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+
     template_dir = _TEMPLATES_DIR / template_name
     if not template_dir.exists():
         template_dir = _USER_TEMPLATES_DIR / template_name
@@ -144,13 +148,8 @@ def apply_template(template_name: str, target_dir: Path) -> str:
             shutil.copy2(item, dest)
         copied += 1
 
-    guide = template_dir / "TEMPLATE_GUIDE.md"
-    guide_text = ""
-    if guide.exists():
-        guide_text = guide.read_text(encoding="utf-8")
-
     return (
-        f"📄 模板 '{template_name}' 已复制到当前目录（{copied} 个文件/目录）。\n\n"
-        f"接下来由 Claude Code 读取你的文档和模板，自动填入内容并编译 PDF。\n"
-        f"{'模板指引：' + guide_text if guide_text else ''}"
+        f"📄 模板 '{template_name}' 已复制到 `{target_dir}`（{copied} 个文件/目录）。\n\n"
+        f"把你的论文/文档文件放到这个目录，然后说「帮我格式化」即可。\n"
+        f"可通过环境变量 `SJTU_PAPERS_DIR` 自定义目录。"
     )

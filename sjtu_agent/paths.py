@@ -36,6 +36,7 @@ except ImportError:
     pass
 
 ASSIGNMENTS_DIR = Path(os.environ.get("SJTU_HOMEWORK_DIR", str(DATA_DIR / "assignments")))
+PAPERS_DIR = Path(os.environ.get("SJTU_PAPERS_DIR", str(DATA_DIR / "papers")))
 CONFIG_PATH = DATA_DIR / "config.json"
 AGENT_CONFIG_PATH = DATA_DIR / "agent_config.json"
 REMINDERS_PATH = DATA_DIR / "reminders.json"
