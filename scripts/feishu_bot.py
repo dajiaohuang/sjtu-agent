@@ -919,6 +919,24 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 return _do_hw_answer(open_id)
             else:
                 return run_homework_check(list_only=True)
+        if cmd == "/template":
+            sub = parts[1].strip() if len(parts) > 1 else ""
+            from sjtu_agent.overleaf_client import list_local_templates
+            templates = list_local_templates()
+            if not templates:
+                return "暂无可用模板。请从 SJTU Overleaf Gallery 克隆模板到本地。"
+            if not sub:
+                lines = ["📄 **可用模板**："]
+                for t in templates:
+                    src = "📦 内置" if t["source"] == "builtin" else "📥 下载"
+                    lines.append(f"  [{t['name']}] {t['description']} {src}")
+                lines.append("\n/template <名称> 套用模板")
+                return "\n".join(lines)
+            # 查找模板
+            match = next((t for t in templates if t["name"] == sub), None)
+            if not match:
+                return f"模板不存在: {sub}。用 /template 查看可用模板。"
+            return f"[template] 📄 模板 {sub} 已就绪。\n\n由于模板文件需从 SJTU Overleaf Gallery 获取具体 .cls/.sty 文件，请先执行：\n```\ngit clone https://latex.sjtu.edu.cn/git/<project-id> sjtu_agent/sjtu_templates/{sub}\n```\n完成后即可用 /template {sub} 套用。"
         return f"未知命令：{cmd}。输入 /help 查看可用命令。"
 
 
