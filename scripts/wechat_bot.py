@@ -41,6 +41,7 @@ import re
 import sys
 import threading
 import time
+import tempfile
 import uuid
 import datetime as _dt
 from pathlib import Path
@@ -62,6 +63,7 @@ logger = logging.getLogger("wechat_bot")
 ILINK_BASE = "https://ilinkai.weixin.qq.com"
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[mKABCDEFGHJKST]')
+_TMP_DIR = Path(tempfile.mkdtemp(prefix="sjtu_wechat_"))
 
 
 # ── ilink HTTP 客户端 ──────────────────────────────────────────────────────────
@@ -319,6 +321,247 @@ def _capture_turn(sess: dict, user_text: str) -> str:
     return clean[idx + len(marker):].strip()
 
 
+def _model_supports_vision(model: str) -> bool:
+    m = (model or "").lower()
+    return any(kw in m for kw in [
+        "vision", "gpt-4o", "gpt-4-turbo", "claude-3", "claude-4",
+        "gemini", "qwen-vl", "qwen3vl", "glm-4v", "internvl",
+        "sonnet-4", "opus-4", "haiku-4",
+    ])
+
+
+def _capture_turn_multimodal(sess: dict, content: list) -> str:
+    _init_messages(sess)
+    if sess["messages"] and sess["messages"][0]["role"] == "system":
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx()
+    sess["messages"].append({"role": "user", "content": content})
+
+    buf = io.StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = buf
+    try:
+        agent._run_one_turn(
+            sess["client_box"][0],
+            sess["model_box"][0],
+            sess["messages"],
+        )
+    finally:
+        sys.stdout = old_stdout
+
+    clean = _ANSI_RE.sub("", buf.getvalue())
+    marker = "Agent: "
+    idx = clean.rfind(marker)
+    if idx == -1:
+        for m in reversed(sess["messages"]):
+            if m.get("role") == "assistant":
+                c = m.get("content", "")
+                if isinstance(c, str):
+                    return c.strip() or "(已完成)"
+                if isinstance(c, list):
+                    texts = [b.get("text", "") for b in c if b.get("type") == "text"]
+                    return "\n".join(texts).strip() or "(已完成)"
+        return "(已完成)"
+    return clean[idx + len(marker):].strip()
+
+
+def _guess_suffix_from_url(url: str, default: str = ".bin") -> str:
+    path = url.split("?")[0]
+    suffix = Path(path).suffix.lower()
+    return suffix or default
+
+
+def _guess_suffix_from_content_type(content_type: str, media_type: str = "file") -> str:
+    ct = (content_type or "").lower()
+    if "jpeg" in ct:
+        return ".jpg"
+    if "png" in ct:
+        return ".png"
+    if "webp" in ct:
+        return ".webp"
+    if "gif" in ct:
+        return ".gif"
+    if "pdf" in ct:
+        return ".pdf"
+    if "mpeg" in ct:
+        return ".mp3"
+    if "wav" in ct:
+        return ".wav"
+    if "mp4" in ct:
+        return ".mp4"
+    if "ogg" in ct:
+        return ".ogg"
+    if "plain" in ct:
+        return ".txt"
+    if media_type == "audio":
+        return ".m4a"
+    if media_type == "image":
+        return ".jpg"
+    return ".bin"
+
+
+def _download_media(url: str, media_type: str = "file", filename: str = "") -> Path:
+    if not url:
+        raise RuntimeError("附件下载地址为空")
+    resp = httpx.get(url, timeout=60, follow_redirects=True)
+    resp.raise_for_status()
+    name = (filename or "").strip()
+    if not name:
+        suffix = _guess_suffix_from_url(url, default="")
+        if not suffix:
+            suffix = _guess_suffix_from_content_type(resp.headers.get("content-type", ""), media_type=media_type)
+        name = f"wechat_media_{int(time.time())}{suffix}"
+    save_path = _TMP_DIR / name
+    save_path.write_bytes(resp.content)
+    return save_path
+
+
+def _extract_url_from_media_blob(blob: dict) -> str:
+    if not isinstance(blob, dict):
+        return ""
+    # Doc-first: OpenClaw/iLink official wrappers may expose these direct URL fields.
+    for key in ("url", "download_url", "file_url"):
+        val = blob.get(key)
+        if isinstance(val, str) and val.startswith(("http://", "https://")):
+            return val
+    # Common nested key in iLink message schema.
+    media = blob.get("media")
+    if isinstance(media, dict):
+        for key in ("url", "download_url", "file_url"):
+            val = media.get(key)
+            if isinstance(val, str) and val.startswith(("http://", "https://")):
+                return val
+    # Compatibility fallback for non-standard gateways.
+    for val in blob.values():
+        if isinstance(val, str) and val.startswith(("http://", "https://")):
+            return val
+        if isinstance(val, dict):
+            nested = _extract_url_from_media_blob(val)
+            if nested:
+                return nested
+    return ""
+
+
+def _extract_message_payload(item_list: list[dict]) -> tuple[str, dict | None]:
+    text = ""
+    media: dict | None = None
+    for item in item_list:
+        try:
+            itype = int(item.get("type"))
+        except Exception:
+            itype = 0
+        if itype == 1 and not text:
+            text = item.get("text_item", {}).get("text", "").strip()
+            continue
+        if media is not None:
+            continue
+
+        # Official item mapping:
+        # 2=image_item, 3=voice_item, 4=file_item, 5=video_item
+        if itype == 2:
+            blob = item.get("image_item", {}) if isinstance(item.get("image_item", {}), dict) else {}
+            media = {
+                "type": "image",
+                "url": _extract_url_from_media_blob(blob),
+                "filename": str(blob.get("file_name", "") or blob.get("name", "") or "").strip(),
+                "stt_text": "",
+            }
+            continue
+
+        if itype == 3:
+            blob = item.get("voice_item", {}) if isinstance(item.get("voice_item", {}), dict) else {}
+            stt_text = str(blob.get("text", "") or "").strip()
+            media = {
+                "type": "audio",
+                "url": _extract_url_from_media_blob(blob),
+                "filename": str(blob.get("file_name", "") or blob.get("name", "") or "").strip(),
+                "stt_text": stt_text,
+            }
+            continue
+
+        if itype == 4:
+            blob = item.get("file_item", {}) if isinstance(item.get("file_item", {}), dict) else {}
+            media = {
+                "type": "file",
+                "url": _extract_url_from_media_blob(blob),
+                "filename": str(blob.get("file_name", "") or blob.get("name", "") or "").strip(),
+                "stt_text": "",
+            }
+            continue
+
+        if itype == 5:
+            blob = item.get("video_item", {}) if isinstance(item.get("video_item", {}), dict) else {}
+            media = {
+                "type": "video",
+                "url": _extract_url_from_media_blob(blob),
+                "filename": str(blob.get("file_name", "") or blob.get("name", "") or "").strip(),
+                "stt_text": "",
+            }
+            continue
+
+    return text, media
+
+
+def _build_parser_context(local_path: Path, media_type: str = "file", max_chars: int = 3000) -> tuple[str, str]:
+    def _infer_backend_missing(parse_result: dict) -> str:
+        text = " ".join(
+            [
+                str((parse_result or {}).get("error", "") or ""),
+                str((parse_result or {}).get("content", "") or ""),
+                " ".join(str(x) for x in ((parse_result or {}).get("warnings") or [])),
+            ]
+        ).lower()
+        if "pdf ocr backend missing" in text or "pypdfium2" in text:
+            return "pdf_ocr"
+        if "whisper backend is not installed" in text or "asr backend missing" in text:
+            return "whisper"
+        if "paddleocr backend is not installed" in text or "ocr backend missing" in text or "ppt ocr backend missing" in text:
+            return "paddleocr"
+        return ""
+
+    try:
+        strategy = "auto"
+        if media_type == "image":
+            strategy = "paddleocr"
+        elif media_type == "audio":
+            strategy = "whisper"
+        parse_result = agent.tool_parse_local_file(
+            str(local_path),
+            max_chars=4000,
+            start_page=1,
+            strategy=strategy,
+        )
+        if not (parse_result or {}).get("ok") and strategy in {"paddleocr", "whisper"}:
+            parse_result = agent.tool_parse_local_file(
+                str(local_path),
+                max_chars=4000,
+                start_page=1,
+                strategy="auto",
+            )
+        extracted = (parse_result or {}).get("content", "")
+        if extracted:
+            parser_name = parse_result.get("parser", "unknown")
+            return (
+                f"\n\n以下是附件提取的文字内容（parser={parser_name}）：\n```\n{extracted[:max_chars]}\n```",
+                "",
+            )
+        err = (parse_result or {}).get("error", "")
+        warnings = (parse_result or {}).get("warnings") or []
+        backend = _infer_backend_missing(parse_result or {})
+        if backend:
+            warn_text = "；".join(str(x) for x in warnings if x)
+            return (
+                (
+                    "\n\n[附件解析状态]\n"
+                    f"{warn_text or err or '检测到 OCR/ASR 解析模块缺失'}\n"
+                    f"建议：先询问用户是否安装解析模块；若用户同意，再调用 install_parse_backend(backend='{backend}') 安装后重试解析。"
+                ),
+                "",
+            )
+        return "", (err or ("；".join(str(x) for x in warnings if x) or "解析结果为空"))
+    except Exception as ex:
+        return "", str(ex)
+
+
 # ── 消息处理 ──────────────────────────────────────────────────────────────────
 
 _reply_lock = threading.Lock()
@@ -334,14 +577,8 @@ def handle_message(client: ILinkClient, msg: dict) -> None:
     from_user   = msg.get("from_user_id", "")
     item_list   = msg.get("item_list", [])
 
-    # 提取文本内容
-    text = ""
-    for item in item_list:
-        if item.get("type") == 1:
-            text = item.get("text_item", {}).get("text", "").strip()
-            break
-
-    if not ctx_token or not text:
+    text, media = _extract_message_payload(item_list)
+    if not ctx_token or (not text and media is None):
         return
 
     # 保存 context_token 和 to_user_id（供主动推送使用）
@@ -350,7 +587,10 @@ def handle_message(client: ILinkClient, msg: dict) -> None:
         wechat_to_user_id=from_user,
     )
 
-    logger.info(f"收到消息 from={from_user[:8]}…：{text[:50]}")
+    if text:
+        logger.info(f"收到消息 from={from_user[:8]}…：{text[:50]}")
+    else:
+        logger.info(f"收到媒体消息 from={from_user[:8]}…：{(media or {}).get('type', 'unknown')}")
 
     # 发送"正在输入"状态
     client.send_typing(ctx_token)
@@ -363,7 +603,72 @@ def handle_message(client: ILinkClient, msg: dict) -> None:
     with _reply_lock:
         try:
             sess  = _get_or_create_session()
-            reply = _capture_turn(sess, text)
+            model = sess["model_box"][0]
+            reply = ""
+            if media is not None:
+                media_type = media.get("type", "file")
+                media_url = media.get("url", "")
+                stt_text = str(media.get("stt_text", "") or "").strip()
+
+                # Voice item may include platform STT text even when no direct media URL is exposed.
+                if media_type == "audio" and not media_url and stt_text:
+                    prompt = (
+                        "[用户发送了语音消息，平台转写如下]\n"
+                        f"{stt_text}\n\n"
+                        "请根据这段转写内容回答用户；若信息不足，再追问。"
+                    )
+                    if text:
+                        prompt += f"\n\n用户补充：{text}"
+                    reply = _capture_turn(sess, prompt)
+                    _send_chunks(client, reply, from_user, ctx_token)
+                    return
+
+                if not media_url:
+                    raise RuntimeError("该媒体消息未提供可下载 URL（可能仅包含加密 CDN 引用）")
+
+                local_path = _download_media(
+                    media_url,
+                    media_type=media_type,
+                    filename=media.get("filename", ""),
+                )
+                if media_type == "image" and _model_supports_vision(model):
+                    img_bytes = local_path.read_bytes()
+                    b64 = base64.b64encode(img_bytes).decode()
+                    content: list = []
+                    if text:
+                        content.append({"type": "text", "text": text})
+                    else:
+                        content.append({"type": "text", "text": "用户发送了一张图片，请先描述图片内容，再回答用户问题。"})
+                    if agent._is_anthropic_model(model):
+                        content.append({
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+                        })
+                    else:
+                        content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                        })
+                    reply = _capture_turn_multimodal(sess, content)
+                else:
+                    parsed_ctx, parse_err = _build_parser_context(local_path, media_type=media.get("type", "file"))
+                    user_text = (
+                        f"[用户通过微信发送了附件]\n"
+                        f"  类型：{media.get('type', 'file')}\n"
+                        f"  文件名：{local_path.name}\n"
+                        f"  本地路径：{local_path}\n"
+                        f"  文件大小：{local_path.stat().st_size // 1024} KB"
+                    )
+                    if parsed_ctx:
+                        user_text += parsed_ctx
+                    else:
+                        user_text += f"\n\n（附件解析失败：{parse_err}）"
+                    if text:
+                        user_text += f"\n\n用户补充：{text}"
+                    user_text += "\n\n请根据已提取内容回答；若信息不足，再向用户追问。"
+                    reply = _capture_turn(sess, user_text)
+            else:
+                reply = _capture_turn(sess, text)
             # 微信消息长度限制约 4096，超出则分段发送
             _send_chunks(client, reply, from_user, ctx_token)
         except Exception as e:
