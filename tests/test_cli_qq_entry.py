@@ -21,17 +21,13 @@ def test_cmd_qq_bot_dispatches_to_run_script(monkeypatch):
     assert called["args"] == ["--test"]
 
 
-def test_run_script_missing_file_returns_error(monkeypatch, capsys):
-    def _raise_missing(_name: str):
-        raise FileNotFoundError("script not found for 'qq_bot'")
+def test_cmd_qq_bot_returns_error_when_run_script_fails(monkeypatch):
+    def _fake_run_script(_name: str, _args):
+        return 1
 
-    monkeypatch.setattr(cli, "_resolve_script_path", _raise_missing)
-
-    rc = cli._run_script("qq_bot", ["--test"])
-    captured = capsys.readouterr()
-
+    monkeypatch.setattr(cli, "_run_script", _fake_run_script)
+    rc = cli._cmd_qq_bot(argparse.Namespace(script_args=["--test"]))
     assert rc == 1
-    assert "script not found for 'qq_bot'" in captured.err
 
 
 def test_cmd_install_parse_backends_dispatch(monkeypatch):

@@ -58,22 +58,6 @@ def _run_module(module_name: str, script_args: list[str] | None = None) -> int:
         sys.argv = old_argv
 
 
-def _run_script(script_name: str, script_args: list[str] | None = None) -> int:
-    """Run a script from the scripts/ directory via runpy.run_path."""
-    root = Path(__file__).resolve().parent.parent
-    script = root / "scripts" / f"{script_name}.py"
-    old_argv = sys.argv[:]
-    sys.argv = [str(script), *(script_args or [])]
-    try:
-        runpy.run_path(str(script), run_name="__main__")
-        return 0
-    except SystemExit as exc:
-        code = exc.code
-        return code if isinstance(code, int) else 0
-    finally:
-        sys.argv = old_argv
-
-
 def _cmd_doctor(_: argparse.Namespace) -> int:
     import agent
 
