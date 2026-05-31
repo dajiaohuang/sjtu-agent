@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Fetch SJTUTeX
+        uses: dsaltares/fetch-gh-release-asset@master
+        id: fetch-sjtutex-release
+        with:
+          repo: 'sjtug/SJTUTeX'
+          file: 'sjtutex.tds.zip'
+          target: '.github/sjtutex.tds.zip'
+      - name: Build package
+        run: |
+          unzip -o .github/sjtutex.tds.zip "tex/*" -d texmf/
+          git add -A texmf/
+          git archive --format=zip --prefix="SJTUThesis-full-${GITHUB_REF_NAME#v}/" -o SJTUThesis-full-${GITHUB_REF_NAME#v}.zip $(git stash create)
+      - name: Build sample
+        uses: xu-cheng/texlive-action@v2
+        with:
+          scheme: full
+          run: |
+            latexmk -halt-on-error -time -xelatex -jobname=sjtuthesis-sample main.tex
+      - name: Generate release notes
+        run: |
+          echo "SJTUTeX version: [${{ steps.fetch-sjtutex-release.outputs.version }}](https://github.com/sjtug/SJTUTeX/releases/tag/${{ steps.fetch-sjtutex-release.outputs.version }})" > ${{ github.workspace }}-RELEASE.txt
+          awk -v ver="[${GITHUB_REF_NAME}]" '/^#+ \[/ { if (p) { exit }; if ($2 == ver) { p=1; next } } p' RELEASES.md >> ${{ github.workspace }}-RELEASE.txt
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: ${{ github.workspace }}-RELEASE.txt 
+          draft: true
+          prerelease: false
+          files: |
+            SJTUThesis-full-*.zip
+            sjtuthesis-sample.pdf

@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from sjtu_agent.paths import DATA_DIR
@@ -16,6 +16,14 @@ from sjtu_agent.paths import DATA_DIR
 _OVERLEAF_BASE = "https://latex.sjtu.edu.cn"
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "sjtu_templates"
 _USER_TEMPLATES_DIR = DATA_DIR / "sjtu_templates"
+
+if sys.platform == "win32":
+    _NO_WINDOW = subprocess.CREATE_NO_WINDOW
+    _STARTUP = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW,
+                                       wShowWindow=subprocess.SW_HIDE)
+else:
+    _NO_WINDOW = 0
+    _STARTUP = None
 
 
 def list_local_templates() -> list[dict]:
@@ -109,3 +117,40 @@ def compile_latex(tex_file: Path, work_dir: Path | None = None) -> tuple[bool, s
         return False, "[xelatex] 编译超时"
     except Exception as e:
         return False, f"[xelatex] 异常: {e}"
+
+
+def apply_template(template_name: str, target_dir: Path) -> str:
+    """将模板复制到目标目录，返回操作说明文本。"""
+    template_dir = _TEMPLATES_DIR / template_name
+    if not template_dir.exists():
+        template_dir = _USER_TEMPLATES_DIR / template_name
+    if not template_dir.exists():
+        return f"模板 '{template_name}' 不存在。用 /template 查看可用模板。"
+
+    # 复制模板文件（排除 .git, LICENSE, README*, TEMPLATE_GUIDE*）
+    copied = 0
+    for item in template_dir.iterdir():
+        name = item.name
+        if name.startswith(".") or name in ("LICENSE",):
+            continue
+        if name.startswith("README") or name.startswith("TEMPLATE_GUIDE"):
+            continue
+        dest = target_dir / name
+        if item.is_dir():
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(item, dest)
+        else:
+            shutil.copy2(item, dest)
+        copied += 1
+
+    guide = template_dir / "TEMPLATE_GUIDE.md"
+    guide_text = ""
+    if guide.exists():
+        guide_text = guide.read_text(encoding="utf-8")
+
+    return (
+        f"📄 模板 '{template_name}' 已复制到当前目录（{copied} 个文件/目录）。\n\n"
+        f"接下来由 Claude Code 读取你的文档和模板，自动填入内容并编译 PDF。\n"
+        f"{'模板指引：' + guide_text if guide_text else ''}"
+    )
