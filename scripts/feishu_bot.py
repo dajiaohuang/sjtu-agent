@@ -213,11 +213,13 @@ _FS_CTX = (
     "- 重命名/改名 → /name <序号> <新名称>\n"
     "- 聊天记录/之前说了什么 → /history\n"
     "- 删除对话/清空聊天 → /delete <序号>\n"
+    "- 套用 SJTU 模板/毕业论文格式/课程报告模板 → /template\n"
     "- 查看帮助/有什么功能/怎么用/命令列表 → /help\n"
     "\n"
     "## 主动引导\n"
     "当用户问「你能做什么」「有什么功能」「怎么用」时，按以下结构回复：\n"
     "📝 **作业管理**：/hw 列出作业，/hw do <序号> 下载解答，/hw due <N> 查看近期，/hw past 历史作业\n"
+    "📄 **LaTeX 模板**：/template 列出模板，/template bachelor-thesis 套用毕业论文格式\n"
     "📅 **学习信息**：查 DDL、看课表、查成绩、物理实验\n"
     "💬 **对话管理**：/new /list /switch /name /delete /history\n"
     "🔍 **校园搜索**：教务处通知、水源社区、选课社区评价\n"
@@ -1033,6 +1035,9 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 "`/hw answer`  获取完整解答（分析后使用）\n"
                 "`/hw all`  分析全部作业\n"
                 "`/hw list`  列出作业（同 /hw）\n\n"
+                "📄 LaTeX 模板\n"
+                "`/template`  列出可用模板\n"
+                "`/template <名称>`  套用模板，如 /template bachelor-thesis\n\n"
                 "ℹ️  `/help`  显示此帮助"
             )
         if cmd == "/hw":
