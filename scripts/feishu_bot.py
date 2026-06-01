@@ -79,7 +79,7 @@ _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_pre
 # ── 多对话会话（每个 open_id 可拥有多个独立对话） ────────────────────────
 _sessions: dict[str, dict] = {}
 _locks: dict[str, threading.Lock] = {}
-_sess_meta_lock = threading.Lock()
+_sess_meta_lock = threading.RLock()  # reentrant: _handle_commands calls _save_sessions inside lock
 
 # ── 作业解答上下文（记住最近一次 /hw do，供"给我答案"使用）────────────────
 _hw_context: dict[str, dict] = {}
