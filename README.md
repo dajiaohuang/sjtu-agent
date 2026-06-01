@@ -4,7 +4,7 @@
 
 面向上海交通大学学生的校园助手，提供终端对话、Telegram / 飞书 / 微信 / QQ Bot、提醒守护进程和 MCP Server。
 
-English summary: A deployable Shanghai Jiao Tong University campus assistant with terminal chat, Telegram / Feishu (Lark) / WeChat / QQ bots, reminder daemon, and MCP server.
+[English Version](README_EN.md)
 
 👉 **[项目展示页](https://kuan-er.github.io/sjtu-agent)**
 
