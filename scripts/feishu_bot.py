@@ -20,7 +20,6 @@ feishu_bot.py — 将 agent.py 接入飞书（Lark）自建应用，长连接接
 import argparse
 import base64
 import concurrent.futures
-import io
 import json
 import re
 import sys
@@ -277,42 +276,33 @@ def _init_messages(sess: dict) -> None:
     })
 
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mKABCDEFGHJKST]")
+def _extract_assistant_reply(sess: dict) -> str:
+    """Extract the last assistant reply from session messages."""
+    for m in reversed(sess["messages"]):
+        if m.get("role") == "assistant":
+            content = m.get("content", "")
+            if isinstance(content, str):
+                return content.strip() or "(已完成)"
+            if isinstance(content, list):
+                texts = [b.get("text", "") for b in content if b.get("type") == "text"]
+                return "\n".join(texts).strip() or "(已完成)"
+    return "(已完成)"
 
 
 def _capture_turn(sess: dict, user_text: str) -> str:
-    """Run one agent turn, capture its stdout, return the assistant reply text."""
+    """Run one agent turn, return the assistant reply text."""
     _init_messages(sess)
     if sess["messages"] and sess["messages"][0]["role"] == "system":
         sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx() + _FS_CTX
     sess["messages"].append({"role": "user", "content": user_text})
 
-    buf = io.StringIO()
-    old_stdout = sys.stdout
-    sys.stdout = buf
-    try:
-        agent._run_one_turn(
-            sess["client_box"][0],
-            sess["model_box"][0],
-            sess["messages"],
-        )
-    finally:
-        sys.stdout = old_stdout
+    agent._run_one_turn(
+        sess["client_box"][0],
+        sess["model_box"][0],
+        sess["messages"],
+    )
 
-    clean = _ANSI_RE.sub("", buf.getvalue())
-    marker = "Agent: "
-    idx = clean.rfind(marker)
-    if idx == -1:
-        for m in reversed(sess["messages"]):
-            if m.get("role") == "assistant":
-                content = m.get("content", "")
-                if isinstance(content, str):
-                    return content.strip() or "(已完成)"
-                if isinstance(content, list):
-                    texts = [b.get("text", "") for b in content if b.get("type") == "text"]
-                    return "\n".join(texts).strip() or "(已完成)"
-        return "(已完成)"
-    return clean[idx + len(marker):].strip()
+    return _extract_assistant_reply(sess)
 
 
 # ── 消息去重 ──────────────────────────────────────────────────────────────────
@@ -372,32 +362,13 @@ def _capture_turn_multimodal(sess: dict, content: list) -> str:
         sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx() + _FS_CTX
     sess["messages"].append({"role": "user", "content": content})
 
-    buf = io.StringIO()
-    old_stdout = sys.stdout
-    sys.stdout = buf
-    try:
-        agent._run_one_turn(
-            sess["client_box"][0],
-            sess["model_box"][0],
-            sess["messages"],
-        )
-    finally:
-        sys.stdout = old_stdout
+    agent._run_one_turn(
+        sess["client_box"][0],
+        sess["model_box"][0],
+        sess["messages"],
+    )
 
-    clean = _ANSI_RE.sub("", buf.getvalue())
-    marker = "Agent: "
-    idx = clean.rfind(marker)
-    if idx == -1:
-        for m in reversed(sess["messages"]):
-            if m.get("role") == "assistant":
-                c = m.get("content", "")
-                if isinstance(c, str):
-                    return c.strip() or "(已完成)"
-                if isinstance(c, list):
-                    texts = [b.get("text", "") for b in c if b.get("type") == "text"]
-                    return "\n".join(texts).strip() or "(已完成)"
-        return "(已完成)"
-    return clean[idx + len(marker):].strip()
+    return _extract_assistant_reply(sess)
 
 
 def _get_tenant_access_token() -> str:
@@ -1185,6 +1156,32 @@ def _build_parser_context(local_path: Path, media_type: str = "file", max_chars:
         return "", str(ex)
 
 
+_CAPTURE_TIMEOUT = 120  # 单轮 LLM 调用最大等待秒数
+
+
+def _run_fn_with_timeout(fn, timeout: float, *args):
+    """在临时线程中运行 fn(*args)，超时抛出 TimeoutError。"""
+    result = []
+    exc = []
+    done = threading.Event()
+
+    def _wrapper():
+        try:
+            result.append(fn(*args))
+        except Exception as e:
+            exc.append(e)
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_wrapper, daemon=True)
+    t.start()
+    if not done.wait(timeout):
+        raise TimeoutError(f"操作超时（{timeout}秒）")
+    if exc:
+        raise exc[0]
+    return result[0] if result else None
+
+
 def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
     """Phase 2: 在后台线程中执行 LLM 推理 + 回复。"""
     # 防御性检查：如果主循环已拦截并回复，不再走 LLM
@@ -1196,7 +1193,11 @@ def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
         _reply_text(message_id, "上一条消息还在处理中，请稍候…")
         return
     try:
-        reply = _capture_turn(conv, text)
+        reply = _run_fn_with_timeout(_capture_turn, _CAPTURE_TIMEOUT, conv, text)
+    except TimeoutError:
+        print(f"[feishu] LLM 调用超时（{_CAPTURE_TIMEOUT}s），释放锁")
+        _reply_text(message_id, "处理超时，请稍后重试")
+        return
     except Exception as e:
         print(f"[feishu] 处理出错：{e}")
         _reply_text(message_id, f"出错了：{e}")
@@ -1212,7 +1213,8 @@ def _process_media_in_thread(sender_open_id: str, message_id: str, msg_type: str
     if not lock.acquire(blocking=False):
         _reply_text(message_id, "上一条消息还在处理中，请稍候…")
         return
-    try:
+
+    def _do_media_process():
         media = _extract_media_ref(msg_type, content_json)
         if not media:
             _reply_text(message_id, f"暂不支持解析该消息内容（类型={msg_type}）。")
@@ -1260,6 +1262,12 @@ def _process_media_in_thread(sender_open_id: str, message_id: str, msg_type: str
         user_text += "\n\n请根据已提取内容回答；若信息不足，再向用户追问。"
         reply = _capture_turn(conv, user_text)
         _reply_text(message_id, reply)
+
+    try:
+        _run_fn_with_timeout(_do_media_process, _CAPTURE_TIMEOUT)
+    except TimeoutError:
+        print(f"[feishu] 媒体处理超时（{_CAPTURE_TIMEOUT}s），释放锁")
+        _reply_text(message_id, "处理超时，请稍后重试")
     except Exception as e:
         print(f"[feishu] 媒体处理出错：{e}")
         _reply_text(message_id, f"附件处理失败：{e}")
