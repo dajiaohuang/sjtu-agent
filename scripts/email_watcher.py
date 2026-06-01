@@ -212,15 +212,30 @@ def _check_new_emails() -> list[dict]:
             pass
 
 
+_sent_uids: set[int] = set()       # 本次会话已推送的 UID，防重复刷屏
+_last_push_time: float = 0.0       # 全局冷却时间戳
+_PUSH_COOLDOWN = 30                # 两次推送之间至少间隔 30 秒
+
+
 def run_once() -> None:
     """检查一轮新邮件，推送通知，保存状态。"""
+    global _last_push_time
     new_emails = _check_new_emails()
     if not new_emails:
-        print(f"[{datetime.now(CST):%H:%M}] 无新邮件")
         return
 
+    now = time.time()
     max_uid = new_emails[-1]["uid"]
     for em in new_emails:
+        uid = em["uid"]
+        # 已推送过的 UID 跳过
+        if uid in _sent_uids:
+            continue
+        # 全局冷却
+        if _last_push_time and now - _last_push_time < _PUSH_COOLDOWN:
+            print(f"[{datetime.now(CST):%H:%M}] 邮件 uid={uid} 在冷却期内，跳过")
+            continue
+
         text = (
             f"📧 新邮件\n"
             f"发件人: {em['from']}\n"
@@ -229,7 +244,10 @@ def run_once() -> None:
             f"正文预览: {em['body_preview']}"
         )
         ok = _push_feishu(text)
-        print(f"[{datetime.now(CST):%H:%M}] 新邮件 uid={em['uid']} {em['subject'][:30]} "
+        if ok:
+            _sent_uids.add(uid)
+            _last_push_time = now
+        print(f"[{datetime.now(CST):%H:%M}] 新邮件 uid={uid} {em['subject'][:30]} "
               f"推送{'OK' if ok else 'FAIL'}")
 
     atomic_write_json(_STATE_PATH, {"last_uid": max_uid, "last_check": datetime.now(CST).isoformat()})
