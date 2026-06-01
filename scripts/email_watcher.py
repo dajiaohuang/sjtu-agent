@@ -106,6 +106,25 @@ def _extract_body(msg) -> str:
     return text
 
 
+def _load_state() -> dict:
+    """加载持久化状态：last_uid + sent_uids 集合。"""
+    s = read_json_safe(_STATE_PATH)
+    return {
+        "last_uid": int(s.get("last_uid", 0)),
+        "sent_uids": set(int(u) for u in s.get("sent_uids", [])),
+    }
+
+
+def _save_state(last_uid: int, sent_uids: set) -> None:
+    """持久化状态，sent_uids 截断至最近 200 条防无限增长。"""
+    uids_list = sorted(sent_uids)[-200:]
+    atomic_write_json(_STATE_PATH, {
+        "last_uid": last_uid,
+        "sent_uids": uids_list,
+        "last_check": datetime.now(CST).isoformat(),
+    })
+
+
 def _push_feishu(text: str) -> bool:
     """通过飞书 API 向用户发送私聊消息。返回是否成功。"""
     try:
@@ -147,15 +166,12 @@ def _push_feishu(text: str) -> bool:
         return False
 
 
-def _check_new_emails() -> list[dict]:
-    """IMAP readonly 连接，拉取上次最大 UID 之后的新邮件。返回新邮件列表。"""
+def _check_new_emails(last_uid: int, sent_uids: set) -> list[dict]:
+    """IMAP readonly 连接，拉取 UID > last_uid 且不在 sent_uids 中的新邮件。"""
     username, password = _get_creds()
     if not username or not password:
         print("[email_watcher] 凭据未配置，跳过")
         return []
-
-    state = read_json_safe(_STATE_PATH)
-    last_uid = int(state.get("last_uid", 0))
 
     ctx = ssl.create_default_context()
     try:
@@ -212,28 +228,23 @@ def _check_new_emails() -> list[dict]:
             pass
 
 
-_sent_uids: set[int] = set()       # 本次会话已推送的 UID，防重复刷屏
-_last_push_time: float = 0.0       # 全局冷却时间戳
-_PUSH_COOLDOWN = 30                # 两次推送之间至少间隔 30 秒
+_PUSH_COOLDOWN = 30  # 两次推送之间至少间隔 30 秒
 
 
-def run_once() -> None:
-    """检查一轮新邮件，推送通知，保存状态。"""
-    global _last_push_time
-    new_emails = _check_new_emails()
+def run_once(last_push_time: float = 0.0) -> float:
+    """检查一轮新邮件，推送通知，保存状态。返回更新后的 last_push_time。"""
+    state = _load_state()
+    new_emails = _check_new_emails(state["last_uid"], state["sent_uids"])
     if not new_emails:
-        return
+        return last_push_time
 
     now = time.time()
-    max_uid = new_emails[-1]["uid"]
     for em in new_emails:
         uid = em["uid"]
-        # 已推送过的 UID 跳过
-        if uid in _sent_uids:
+        if uid in state["sent_uids"]:
             continue
-        # 全局冷却
-        if _last_push_time and now - _last_push_time < _PUSH_COOLDOWN:
-            print(f"[{datetime.now(CST):%H:%M}] 邮件 uid={uid} 在冷却期内，跳过")
+        if last_push_time and now - last_push_time < _PUSH_COOLDOWN:
+            # 冷却期内跳过，下次循环重试（不推进 last_uid）
             continue
 
         text = (
@@ -245,21 +256,27 @@ def run_once() -> None:
         )
         ok = _push_feishu(text)
         if ok:
-            _sent_uids.add(uid)
-            _last_push_time = now
+            state["sent_uids"].add(uid)
+            now = time.time()
+            last_push_time = now
+            # 每推送成功一封立刻持久化，防止中途崩溃丢状态
+            new_last = max(state["last_uid"], uid)
+            _save_state(new_last, state["sent_uids"])
+            state["last_uid"] = new_last
         print(f"[{datetime.now(CST):%H:%M}] 新邮件 uid={uid} {em['subject'][:30]} "
               f"推送{'OK' if ok else 'FAIL'}")
 
-    atomic_write_json(_STATE_PATH, {"last_uid": max_uid, "last_check": datetime.now(CST).isoformat()})
+    return last_push_time
 
 
 def run_loop() -> None:
     """持续轮询模式。"""
     print(f"[email_watcher] 启动，间隔 {_CHECK_INTERVAL}s")
     _check_interval = _CHECK_INTERVAL
+    last_push_time = 0.0
     while True:
         try:
-            run_once()
+            last_push_time = run_once(last_push_time)
         except Exception as e:
             print(f"[email_watcher] 错误: {e}")
         time.sleep(_check_interval)
@@ -274,7 +291,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.once:
-        run_once()
+        run_once(0.0)
     else:
         _CHECK_INTERVAL = args.interval
         run_loop()
