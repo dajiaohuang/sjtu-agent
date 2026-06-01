@@ -85,6 +85,7 @@ _sess_meta_lock = threading.Lock()
 # ── 作业解答上下文（记住最近一次 /hw do，供"给我答案"使用）────────────────
 _hw_context: dict[str, dict] = {}
 _hw_ctx_lock = threading.Lock()
+_hw_in_progress: set[str] = set()  # 防止同一用户并发 /hw
 
 # ── 近期更新冷却期（防 Feishu 重发导致重复回复）──────────────────────────
 _recent_updates_cooldown: dict[str, float] = {}
@@ -935,10 +936,10 @@ def _do_hw_answer(open_id: str) -> str:
 
 def _handle_commands(open_id: str, text: str) -> str | None:
     """解析并执行对话管理命令。返回命令结果文本（None 表示不是命令）。"""
-    # 自然语言触发"给我答案"
-    answer_phrases = {"给我答案", "给答案", "核对答案", "我要答案", "获取完整解答",
-                      "看答案", "要答案", "上答案", "出答案"}
-    if text.strip() in answer_phrases:
+    # 自然语言触发"给我答案"（子串匹配，兼容标点符号）
+    _at = text.strip()
+    if any(kw in _at for kw in ["给我答案", "给答案", "核对答案", "我要答案",
+                                  "获取完整解答", "看答案", "要答案", "上答案", "出答案"]):
         with _hw_ctx_lock:
             ctx = _hw_context.get(open_id, {})
         if ctx:
@@ -965,6 +966,7 @@ def _handle_commands(open_id: str, text: str) -> str | None:
             meta["next_name_id"] += 1
             convs.append(_new_conv_dict(name))
             meta["current_idx"] = len(convs) - 1
+            _save_sessions()
             return f"[OK] 已创建并切换到对话「{name}」（序号 {len(convs)}）"
         if cmd == "/switch":
             if len(parts) < 2:
@@ -976,6 +978,7 @@ def _handle_commands(open_id: str, text: str) -> str | None:
             if idx < 0 or idx >= n:
                 return f"无效序号，共 {n} 个对话（1~{n}）"
             meta["current_idx"] = idx
+            _save_sessions()
             return f"[OK] 已切换到对话「{convs[idx]['name']}」（序号 {idx + 1}）"
         if cmd == "/name":
             if len(parts) < 3:
@@ -988,6 +991,7 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 return f"无效序号，共 {n} 个对话（1~{n}）"
             old_name = convs[idx]["name"]
             convs[idx]["name"] = parts[2].strip()
+            _save_sessions()
             return f"[OK] 已将对话 [{idx + 1}]「{old_name}」重命名为「{convs[idx]['name']}」"
         if cmd == "/delete":
             if len(parts) < 2:
@@ -1006,6 +1010,7 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 meta["current_idx"] = len(convs) - 1
             elif meta["current_idx"] > idx:
                 meta["current_idx"] -= 1
+            _save_sessions()
             return f"[OK] 已删除对话「{name}」，当前对话：「{convs[meta['current_idx']]['name']}」"
         if cmd == "/history":
             conv = convs[meta["current_idx"]]
@@ -1050,9 +1055,6 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                     idx = int(parts[2])
                 except ValueError:
                     return f"无效序号：{parts[2]}"
-                # 记住上下文供"给我答案"使用
-                with _hw_ctx_lock:
-                    _hw_context[open_id] = {"idx": idx}
                 return "[homework] 🧠 解题助手模式…\n\n" + run_homework_check(specific_idx=idx)
             elif sub == "brief":
                 if len(parts) < 3:
@@ -1118,6 +1120,8 @@ def _process_hw_command(sender_open_id: str, message_id: str, text: str) -> None
         traceback.print_exc()
         print(f"[feishu] /hw 命令异常: {e}")
         _reply_text(message_id, f"[homework] 出错：{e}")
+    finally:
+        _hw_in_progress.discard(sender_open_id)
 
 
 def _build_parser_context(local_path: Path, media_type: str = "file", max_chars: int = 3000) -> tuple[str, str]:
@@ -1349,6 +1353,10 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
                             _hw_context[sender_open_id] = {"idx": int(rest.split()[0])}
                     except (ValueError, IndexError):
                         pass
+            if sender_open_id in _hw_in_progress:
+                _reply_text(message_id, "[homework] 上一个作业命令仍在处理，请稍候…")
+                return
+            _hw_in_progress.add(sender_open_id)
             _reply_text(message_id, "[homework] 正在处理，请稍候…")
             _EXECUTOR.submit(_process_hw_command, sender_open_id, message_id, text)
             return

@@ -325,18 +325,26 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
             "\n- 最后一行写：「📝 思考后再核对？回复『给我答案』获取完整解答」"
         )
 
+    proc = None
     try:
-        # Windows subprocess 会截断多行参数，改用 stdin 传 prompt
-        result = subprocess.run(
+        proc = subprocess.Popen(
             [_CLAUDE_BIN, "-p", "--add-dir", str(hw_dir), "--permission-mode", "bypassPermissions"],
-            cwd=str(hw_dir), input=prompt,
-            capture_output=True, text=True, timeout=300,
-            encoding="utf-8", errors="replace",
+            cwd=str(hw_dir), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
         )
-        output = result.stdout.strip()
-        if result.returncode != 0 and not output:
-            print(f"[homework] Claude Code 失败 ({result.returncode}), 回退 API")
-            print(f"  stderr: {result.stderr[:200]}")
+        try:
+            stdout, stderr = proc.communicate(input=prompt, timeout=300)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=10)
+            print("[homework] Claude Code 超时（已终止进程），回退 API")
+            return solve_homework(course, aname, content, brief=brief)
+
+        output = stdout.strip()
+        if proc.returncode != 0 and not output:
+            print(f"[homework] Claude Code 失败 ({proc.returncode}), 回退 API")
+            if stderr:
+                print(f"  stderr: {stderr[:200]}")
             return solve_homework(course, aname, content, brief=brief)
 
         # 提取 SUMMARY 作为飞书回复
@@ -346,10 +354,12 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
             summary = output[idx + len(summary_marker):].strip()[:2000]
             return summary + f"\n\n完整解答已保存到 {hw_dir}"
         return output[-2000:] + f"\n\n完整解答已保存到 {hw_dir}"
-    except subprocess.TimeoutExpired:
-        print("[homework] Claude Code 超时，回退 API")
-        return solve_homework(course, aname, content, brief=brief)
     except Exception as e:
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
         print(f"[homework] Claude Code 异常: {e}, 回退 API")
         return solve_homework(course, aname, content, brief=brief)
 
