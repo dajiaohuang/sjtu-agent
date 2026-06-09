@@ -6,6 +6,7 @@ _email, etc.).  External callers never need to know about the internal split.
 """
 
 from sjtu_agent.agent.tools import _core  # accessible as tools._core for tests
+from sjtu_agent.agent.tools import _mcp_skills  # accessible for tests
 from sjtu_agent.agent.tools._core import *  # noqa: F401, F403
 
 # Underscore-prefixed names are part of the public API (imported by agent/__init__.py

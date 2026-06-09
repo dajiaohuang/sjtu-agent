@@ -81,7 +81,7 @@ def test_add_mcp_server_writes_config(tmp_path, monkeypatch):
     from sjtu_agent.agent import tools
     from sjtu_agent.extensions import mcp_client
 
-    monkeypatch.setattr(tools._core, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(tools._mcp_skills, "CONFIG_PATH", config_path)
     monkeypatch.setattr(mcp_client, "list_openai_tools", lambda force_refresh=False: [])
 
     result = tools.tool_add_mcp_server(
@@ -103,7 +103,7 @@ def test_add_skill_writes_and_enables(tmp_path, monkeypatch):
 
     from sjtu_agent.agent import tools
 
-    monkeypatch.setattr(tools._core, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(tools._mcp_skills, "CONFIG_PATH", config_path)
 
     result = tools.tool_add_skill("demo-skill", content="Use this skill for demos.")
     assert result["ok"] is True
@@ -121,7 +121,7 @@ def test_create_skill_requires_clarification_for_missing_details(tmp_path, monke
 
     from sjtu_agent.agent import tools
 
-    monkeypatch.setattr(tools._core, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(tools._mcp_skills, "CONFIG_PATH", config_path)
 
     result = tools.tool_create_skill()
     assert result["requires_more_info"] is True
@@ -135,7 +135,7 @@ def test_create_skill_generates_and_enables_skill(tmp_path, monkeypatch):
 
     from sjtu_agent.agent import tools
 
-    monkeypatch.setattr(tools._core, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(tools._mcp_skills, "CONFIG_PATH", config_path)
 
     result = tools.tool_create_skill(
         name="planner",
@@ -163,7 +163,7 @@ def test_list_skills_includes_user_skill(tmp_path, monkeypatch):
 
     from sjtu_agent.agent import tools
 
-    monkeypatch.setattr(tools._core, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(tools._mcp_skills, "CONFIG_PATH", config_path)
 
     result = tools.tool_list_skills()
     user_skills = [item for item in result["skills"] if item["source"] == "user"]
@@ -187,7 +187,7 @@ def test_manage_skill_enable_disable_delete_user_skill(tmp_path, monkeypatch):
 
     from sjtu_agent.agent import tools
 
-    monkeypatch.setattr(tools._core, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(tools._mcp_skills, "CONFIG_PATH", config_path)
 
     disabled = tools.tool_manage_skill("disable", "planner")
     assert disabled["ok"] is True
