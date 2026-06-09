@@ -272,6 +272,11 @@ def build_report(report_type: str = "evening") -> str:
             lines = []
             for c in courses:
                 t = c.get("time_str") or c.get("time") or ""
+                if not t:
+                    ts = c.get("time_start", "")
+                    te = c.get("time_end", "")
+                    if ts and te:
+                        t = f"{ts}-{te}"
                 room = c.get("room") or c.get("location") or ""
                 lines.append(f"{t} {c.get('name','未知课程')} @ {room}".strip())
             return "\n".join(lines) if lines else f"（{schedule_day_label}无课）"
